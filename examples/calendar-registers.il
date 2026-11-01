@@ -1,0 +1,15 @@
+; X1 prepares the supplied time, X0 compares it; no host RTC input.
+LD X1
+MOV K12 D20
+MOV K20 D21
+MOV K45 D22
+MOV K6 D0
+MOV K0 D1
+MOV K0 D2
+MOV K18 D10
+MOV K0 D11
+MOV K0 D12
+LD X0
+TCMP K12 K20 K45 D20 M10
+TZCP D0 D10 D20 M20
+END

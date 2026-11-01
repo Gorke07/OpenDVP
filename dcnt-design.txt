@@ -1,0 +1,91 @@
+DCNT integration contract — local candidates, not complete CNT-family claim
+
+Owned source: src/counter.rs and counter_tests.rs. Shared source unchanged by
+this agent; no builds/native runs performed. Parent owns integration/proof.
+
+Memory.counters: CounterState (Default Clone Debug). CounterAction has public
+counter:Device, preset:CounterPreset::{Constant(i32),Data(Device)}. API parse,
+name, header0600, dest/destination, label, display_value, devices,
+observed_devices, execute(m,power,actual_header_pc,reset_inhibited).
+Layout6words: header, counter operand, four-word signed32 K/D preset.
+Parse accepts exactly PDF matrix C200..254 + K signed32 / complete D pair.
+At execution model D boundary validated without unsafe partial reads. No
+invented errorcode for unsupported conditions: execution_limitations +hold.
+
+PROFILES
+CounterModel Es2(default)/Ss2, no other model equivalence claim.
+CounterProfile DocumentedEvents(default): general counters rung rising edge,
+physical highspeed input backend, signed >= contact on actual count event.
+InstalledLegacy: authentic installed interpreter C200..234 rung edge,
+>=235 arm/disarm without invented physical counting; equality sets contact
+on up result==preset, down clears at result==preset-1 (wrapping). Independent
+native capability distinction required; never compare HSC no-op to PDF math.
+Per occurrence edge state keyed actual header PC; preserves on false and RST
+as specified by root caller. Multiple active HSC owners rejected. General
+multi-coil behavior retains independent site edges, not a new parser ban.
+
+LIFECYCLE / HOOKS
+CounterState::begin_scan(m): clear same-scan RST inhibit. Call once per scan
+before action execution. Existing ActionScan.reset_counters boolean passed to
+execute. CounterState::note_reset(m,C): clears32value/contact +inhibit; no
+recursive Memory.reset call. Root must call for RST/ZRST/highspeed C reset.
+Held rung after RST does not manufacture an edge. Physical pulses after RST
+can count again (inhibit applies to ordinary instruction-coil edge only).
+False visits hold value/contact and release HSC input ownership. Skipped CJ
+visits retain prior enable; explicit local contract awaiting firmware proof.
+CounterState::set_running(m,bool) stops/resumes capture, no synthesized edge.
+CounterState::seed_inputs(m,[bool;8]) seeds physical level once with no event.
+CounterState::input_edge(m,X,old,new,at_us) processes real physical event;
+never changes process-image X. TimingState already controls latch/REF. Its
+advance_to takes timing state out of Memory, so event path MUST NOT read
+m.timing_io clock/owners; explicit timestamp used exclusively there.
+CounterAction arm/false visits reserve/release TimingState.input_owners using
+External("DCNT"). Other commands see actual reservation. Internal map
+enforces input/counter conflicts plus shared M1260 X7 reset exception.
+service(m) applies C243/244 level reset, restores read-only direction monitors,
+refreshes global-reset claims and blocks cross-command ownership collisions.
+begin_scan calls it. Root must also call after configuration writes (especially
+M1260) before another pulse command can acquire input resources or a DELAY
+advances physical events. It must run with the real TimingState present;
+input_edge never reads temporarily taken-out TimingState.
+Monitor M1232 is model conditional; no universal read-only parser rule.
+CounterState::set_interrupt_reset(m,pin,Some(falling)) injects active IRQ
+reset-edge priority; None releases. Capture D1240/1242 precedes reset; root
+must dispatch actual IRQ only after input_edge returns. No fake ISR backend.
+
+EVENT CONTRACT
+No host sleeps, no scan surrogate for pulses. Direct monotonic u64 timestamp
+events X0..7. Same timestamp ordered by caller. First enable snapshots levels
+without counting existingHIGH. Stale oldlevel/backward timestamp holds event
+with explicit limitation. Trace bounded256, active counters bounded physical
+counter set, occurrence state boundedu16 PC space. Input edge drives software
+R/F, software direction, hardware pulse+dir/dual pulse, A/B gray transitions,
+K1 B rising/K2 B edges/K4 everyedge, signedwrap/up-onlywrap, contact immediate.
+M1243/44 reset-disable latched on activation; change requires false/rearm.
+HardwareResetPolicy::DefaultLevel preserves C243/244 ON-level default;
+SelectedEdge explicitly selects R/F alternative. Other reset input uses R/F.
+M1260 global software reset uses named local rising-edge policy (PDF not exact).
+Modern firmware single_frequency_supported=true explicit; false blocks K1.
+Direction monitor tracks last counted direction; ordinary configuration cannot
+override it after service. Dynamic preset sampled only on actual instruction
+visit, no arbitrary out-of-band reread; false holds public fields.
+
+OPEN FACETS / NO COMPLETENESS CLAIM
+M1260 changes while enabled are internally checked for DCNT pin collisions on
+every event. service() refreshes real cross-command claims and blocks conflicts;
+the caller must invoke it after configuration writes before advancing events.
+No unsupported memory listener magically notices unserviced external writes.
+Physical frequency/drop/filter behavior not invented.
+Hardware C243/244 negative external DMOV state holds with limitation. Reset
+edge/default-level ambiguity explicit; no firmware parity assertion. Power
+cycle/latched retention backend is caller lifecycle, not begin_scan zeroing.
+Installed C>=235 arm/control ancillary flags need native proof. Pending native
+static evidence is supplied independently by additional_probes; no external session
+or native process was controlled by this module author.
+
+Tests: parser matrix/endpoints, signed direction/wrap, RST held edge/negative
+preset, D pair model boundary, genuine physical count/false/rearm/inputimage,
+R/F, modelC232, all quadrature modes/reversal, hardware direction/dual/upwrap,
+reset-disable/IRQcapture, globalresetsharing/conflict, CSFOownership, timestamps,
+STOP/resume/boundedtrace, InstalledLegacy differing semantics, baselineHIGH.
+These source tests require parent compilation/execution before validation claim.

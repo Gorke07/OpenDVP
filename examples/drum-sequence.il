@@ -1,0 +1,12 @@
+; X1 prepares thresholds. X0 runs INCD. X2 adds a count each scan.
+LD X1
+MOV K3 D100
+MOV K2 D101
+MOV K4 D102
+LD X2
+ADD C10 K1 D500
+BMOV D500 C10 K1
+LD X0
+INCD D100 C10 M10 K3
+ABSD D100 C10 M20 K1
+END

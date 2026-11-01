@@ -1,0 +1,90 @@
+_version: 2
+gpui_component:
+  Calendar:
+    week.0:
+      tr: "Pz"
+    week.1:
+      tr: "Pt"
+    week.2:
+      tr: "Sa"
+    week.3:
+      tr: "Ça"
+    week.4:
+      tr: "Pe"
+    week.5:
+      tr: "Cu"
+    week.6:
+      tr: "Ct"
+    month.January:
+      tr: "Ocak"
+    month.February:
+      tr: "Şubat"
+    month.March:
+      tr: "Mart"
+    month.April:
+      tr: "Nisan"
+    month.May:
+      tr: "Mayıs"
+    month.June:
+      tr: "Haziran"
+    month.July:
+      tr: "Temmuz"
+    month.August:
+      tr: "Ağustos"
+    month.September:
+      tr: "Eylül"
+    month.October:
+      tr: "Ekim"
+    month.November:
+      tr: "Kasım"
+    month.December:
+      tr: "Aralık"
+  DatePicker:
+    placeholder:
+      tr: "Tarih seçin"
+  Select:
+    placeholder:
+      tr: "Lütfen seçin"
+  Dock:
+    Unnamed:
+      tr: "Adsız"
+    Close:
+      tr: "Kapat"
+    Zoom In:
+      tr: "Yakınlaştır"
+    Zoom Out:
+      tr: "Uzaklaştır"
+    Collapse:
+      tr: "Daralt"
+    Expand:
+      tr: "Genişlet"
+  Dialog:
+    ok:
+      tr: "Tamam"
+    cancel:
+      tr: "İptal"
+  List:
+    search_placeholder:
+      tr: "Ara..."
+  Input:
+    Replace:
+      tr: "Değiştir"
+    Replace All:
+      tr: "Tümünü değiştir"
+    Cut:
+      tr: "Kes"
+    Copy:
+      tr: "Kopyala"
+    Paste:
+      tr: "Yapıştır"
+    Select All:
+      tr: "Tümünü seç"
+    Go to Definition:
+      tr: "Tanıma git"
+    Show Code Actions:
+      tr: "Kod eylemlerini göster"
+  Settings:
+    search_placeholder:
+      tr: "Ara..."
+    Reset All:
+      tr: "Tümünü sıfırla"

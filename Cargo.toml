@@ -1,0 +1,49 @@
+[package]
+name = "opendvp"
+version = "0.1.0"
+default-run = "opendvp"
+edition = "2024"
+description = "A PLC programming workbench built with Rust and GPUI"
+license = "MIT"
+
+[features]
+default = ["gpui-ui"]
+gpui-ui = ["dep:gpui", "dep:gpui_platform", "dep:gpui-component", "dep:gpui-kit-assets", "dep:rust-i18n", "dep:rust-mcp-sdk", "dep:rust-mcp-axum", "dep:http", "dep:tokio", "dep:async-trait"]
+
+[[bin]]
+name = "opendvp"
+path = "src/gpui_main.rs"
+required-features = ["gpui-ui"]
+
+[dependencies]
+rust-mcp-sdk = { version = "2.0.0", default-features = false, features = ["server", "macros", "stdio"], optional = true }
+rust-mcp-axum = { version = "2.0.0", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"], optional = true }
+http = { version = "1", optional = true }
+async-trait = { version = "0.1", optional = true }
+gpui = { package = "gpui-pre", version = "=0.3.10", optional = true }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", optional = true }
+gpui-component = { version = "0.8.1", optional = true }
+gpui-kit-assets = { version = "0.8.1", optional = true }
+encoding_rs = "0.8"
+rust-i18n = { version = "4.2", optional = true }
+futures = "0.3"
+miniz_oxide = "0.8"
+rfd = { version = "0.17", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serialport = { version = "4.8", default-features = false }
+sha2 = "0.10"
+
+# rust-mcp-axum pulls aws-lc-rs through the SDK auth feature; the prebuilt NASM objects avoid needing NASM on Windows.
+[target.'cfg(windows)'.dependencies]
+aws-lc-sys = { version = "0.47", features = ["prebuilt-nasm"] }
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
+
+[profile.release]
+lto = "thin"
+strip = true
+
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"

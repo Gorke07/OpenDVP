@@ -1,0 +1,17 @@
+{
+  "format_version": 1,
+  "name": "Motor kontrolü",
+  "model": "DVP-ES2 / offline subset",
+  "source": "; Motor mühürleme · X0 başlat / X1 durdur\nLD X0\nOR Y0\nANI X1\nOUT Y0\n\n; Çalıştıktan 3 saniye sonra hazır çıkışı\nLD Y0\nTMR T0 K30\n\n; Hazır lambası\nLD T0\nOUT Y1\n\n; Parça sayacı · X2 sensör\nLD X2\nCNT C0 K5\n\n; Sayacı sıfırla · X3\nLD X3\nRST C0\n\n; Üretim ayarı\nLD Y0\nMOV K125 D0\nEND\n",
+  "watch": [
+    "X0",
+    "X1",
+    "X2",
+    "X3",
+    "Y0",
+    "Y1",
+    "T0",
+    "C0",
+    "D0"
+  ]
+}

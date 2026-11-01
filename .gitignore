@@ -1,0 +1,42 @@
+# ---- Build output ---------------------------------------------------------
+/target/
+**/target/
+*.pdb
+*.exe
+*.obj
+*.rlib
+
+# ---- Local scratch space --------------------------------------------------
+/tmp/
+*.tmp
+*.bak
+*.previous
+*.log
+
+# ---- OpenDVP runtime files (settings, autosave/recovery copies) -----------
+*.onceki.odvp
+settings.txt
+
+# ---- Local research and test-fixture folder (not part of the repository) ----
+/analysis/
+
+# Vendor material must never be committed (Delta installers, DLLs, manuals)
+*.dll
+*.msi
+*.pdf
+*.gbf
+*.rep/
+*.zip
+
+# ---- Python ---------------------------------------------------------------
+__pycache__/
+*.pyc
+
+# ---- Editors, OS and tooling ----------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+.claude/
