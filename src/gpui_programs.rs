@@ -347,60 +347,30 @@ impl Workbench {
         for index in 0..self.project.program_count() {
             row = row.child(chip(index));
         }
-        row = row
-            .child(
-                self.button("add-cyclic", format!("+ {}", tr("Program parçası")), locked)
-                    .ghost()
-                    .tooltip(tr("Ana programın devamı: Main'den sonra, listedeki sırayla çalışır"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.add_program(UnitKind::Cyclic, cx);
-                    })),
-            )
-            .child(
-                self.button("add-subroutine", format!("+ {}", tr("Alt program")), locked)
-                    .ghost()
-                    .tooltip(tr("Yeni alt program (CALL ile çağrılır, SRET ile biter)"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.add_program(UnitKind::Subroutine, cx);
-                    })),
-            )
-            .child(
-                self.button("add-interrupt", format!("+ {}", tr("Kesme")), locked)
-                    .ghost()
-                    .tooltip(tr("Yeni kesme programı (I001…, IRET ile biter)"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.add_program(UnitKind::Interrupt, cx);
-                    })),
-            );
-        row = row
-            .child(div().w(px(1.)).h(px(18.)).bg(rgb(LINE)))
-            .child(
-                self.button("pack-export", tr("Dışa aktar…"), false)
-                    .ghost()
-                    .tooltip(tr("Seçili programı ve kullandığı sembolleri paket dosyasına yazar"))
-                    .on_click(cx.listener(|this, _, _, cx| this.export_package(cx))),
-            )
-            .child(
-                self.button("pack-import", tr("İçe aktar…"), locked)
-                    .ghost()
-                    .tooltip(tr("Paket dosyasındaki programları devre dışı olarak ekler"))
-                    .on_click(cx.listener(|this, _, _, cx| this.import_package_dialog(cx))),
-            )
-            .child({
-                let view = cx.entity();
-                self.button("pack-library", tr("Kütüphane"), locked)
-                    .ghost()
-                    .tooltip(tr("Kendi program kütüphaneniz"))
-                    .dropdown_menu(move |menu, _, _| library_menu(menu, view.clone()))
-            });
-        if self.project.can_split() {
-            row = row.child(
-                self.button("split-main", tr("Alt programlara ayır"), locked)
-                    .ghost()
-                    .tooltip(tr("Main'deki FEND sonrası alt programları ve kesmeleri ayrı programlara böler"))
-                    .on_click(cx.listener(|this, _, _, cx| this.split_program(cx))),
-            );
-        }
+        let view = cx.entity();
+        let can_split = self.project.can_split();
+        row = row.child(div().flex_1()).child(
+            self.button("program-actions", tr("Program işlemleri"), false)
+                .ghost()
+                .dropdown_menu(move |menu, window, cx| {
+                    let action = |label: &'static str, disabled, f: fn(&mut Workbench, &mut Context<Workbench>)| {
+                        let view = view.clone();
+                        PopupMenuItem::new(label).disabled(disabled).on_click(move |_, _, cx| {
+                            view.update(cx, f);
+                        })
+                    };
+                    let library_view = view.clone();
+                    menu.label(tr("Yeni program"))
+                        .item(action(tr("Program parçası"), locked, |this, cx| this.add_program(UnitKind::Cyclic, cx)))
+                        .item(action(tr("Alt program"), locked, |this, cx| this.add_program(UnitKind::Subroutine, cx)))
+                        .item(action(tr("Kesme"), locked, |this, cx| this.add_program(UnitKind::Interrupt, cx)))
+                        .separator()
+                        .item(action(tr("Dışa aktar…"), false, Workbench::export_package))
+                        .item(action(tr("İçe aktar…"), locked, Workbench::import_package_dialog))
+                        .submenu(tr("Kütüphane"), window, cx, move |menu, _, _| library_menu(menu, library_view.clone()))
+                        .when(can_split, |menu| menu.item(action(tr("Alt programlara ayır"), locked, Workbench::split_program)))
+                }),
+        );
         if self.active_program > 0 {
             let unit = &self.project.units[self.active_program - 1];
             let (kind, enabled) = (unit.kind, unit.enabled);

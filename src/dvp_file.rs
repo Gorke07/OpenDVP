@@ -173,12 +173,28 @@ fn device_comments(tail: &[u8]) -> Vec<(String, String)> {
             _ => {
                 let text = ansi_text(line);
                 if let Some((device, comment)) = text.split_once("$&") {
-                    comments.push((device.trim().to_owned(), comment.trim().to_owned()));
+                    comments.push((device_name(device.trim()), comment.trim().to_owned()));
                 }
             }
         }
     }
     comments
+}
+
+/// The comment grid stores the row index after the letter in decimal, also for X/Y, whose PLC
+/// names are octal: `X16` in the file is `X20`. A real project shows it: its comment lines
+/// `X16`..`X39`, `Y16`..`Y31` (and `X18`, which cannot be octal) label exactly the inputs and
+/// outputs its program uses as raw indexes 16..39 (X20..X47, Y20..Y37).
+fn device_name(stored: &str) -> String {
+    let mut chars = stored.chars();
+    let letter = chars.next();
+    let digits = chars.as_str();
+    match (letter, digits.parse::<u32>()) {
+        (Some(letter @ ('X' | 'Y')), Ok(index)) if digits.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("{letter}{index:o}")
+        }
+        _ => stored.to_owned(),
+    }
 }
 
 /// ES2 program area: Delta editor model index 4 (0x7C00 bytes = 15872 words).
@@ -211,10 +227,8 @@ fn ansi_bytes(text: &str, what: &str) -> Result<Vec<u8>, String> {
 
 /// Check one `(device, comment)` pair and return the line Delta editor stores: `X0$&start`.
 ///
-/// Only the line shape and the devices `X0` / `Y0` are confirmed by a file Delta editor saved. The
-/// device name is written verbatim (decimal index after the letter). Delta editor stores the grid row
-/// index, so how X/Y (octal on the PLC) numbers above 7 are stored is unverified; those are
-/// rejected rather than guessed.
+/// `device` is the PLC name (X/Y octal). Delta editor stores the grid row index in decimal, so
+/// X/Y names are converted (`X20` → `X16`, see [`device_name`]); other devices are written as is.
 pub(crate) fn comment_line(device: &str, text: &str) -> Result<Vec<u8>, String> {
     let bad_device = || format!("Geçersiz cihaz adı: {device:?}");
     let mut chars = device.chars();
@@ -230,18 +244,18 @@ pub(crate) fn comment_line(device: &str, text: &str) -> Result<Vec<u8>, String> 
     {
         return Err(bad_device());
     }
-    let index: u32 = digits.parse().map_err(|_| bad_device())?;
-    if (letter == 'X' || letter == 'Y') && index > 7 {
-        return Err(format!(
-            "{device}: X/Y cihaz yorumlarında 7'den büyük numaralandırma doğrulanmadı"
-        ));
-    }
+    let stored = if letter == 'X' || letter == 'Y' {
+        let index = u32::from_str_radix(digits, 8).map_err(|_| bad_device())?;
+        format!("{letter}{index}")
+    } else {
+        device.to_owned()
+    };
     if text.contains("$&") || text.starts_with('<') || text != text.trim() {
         return Err(format!(
             "{device}: yorum metni geçersiz (\"$&\", baştaki '<' veya kenar boşluğu)"
         ));
     }
-    let mut line = device.as_bytes().to_vec();
+    let mut line = stored.into_bytes();
     line.extend_from_slice(b"$&");
     line.extend(ansi_bytes(text, device)?);
     line.push(b'\n');
@@ -490,14 +504,32 @@ Function=Device Comment Range
         let bad = |d: &str, t: &str| write(&[END], "", &[(d.into(), t.into())]);
         assert!(bad("Q0", "x").is_err());
         assert!(bad("X", "x").is_err());
-        assert!(
-            bad("X10", "x").is_err(),
-            "X/Y numbering above 7 is unverified"
-        );
+        assert!(bad("X10", "x").is_ok());
+        assert!(bad("X18", "x").is_err(), "X/Y names are octal");
         assert!(bad("M10", "x").is_ok());
         assert!(bad("X0", "a$&b").is_err());
         assert!(bad("X0", "a\nb").is_err());
         assert!(bad("X0", "<x").is_err());
+    }
+
+    #[test]
+    fn xy_comment_rows_are_decimal_in_the_file_and_octal_in_names() {
+        assert_eq!(device_name("X16"), "X20");
+        assert_eq!(device_name("X18"), "X22");
+        assert_eq!(device_name("Y31"), "Y37");
+        assert_eq!(device_name("X7"), "X7");
+        assert_eq!(device_name("M18"), "M18");
+        assert_eq!(device_name("D1000"), "D1000");
+        assert_eq!(device_name("X+1"), "X+1");
+        assert_eq!(comment_line("X22", "faz").unwrap(), b"X18$&faz\n");
+        assert_eq!(comment_line("Y37", "lamba").unwrap(), b"Y31$&lamba\n");
+        let comments = vec![
+            ("X20".into(), "start".into()),
+            ("Y37".into(), "lamba".into()),
+            ("M18".into(), "yardımcı".into()),
+        ];
+        let file = read(&write(&[END], "", &comments).unwrap()).unwrap();
+        assert_eq!(file.device_comments, comments);
     }
 
     #[test]

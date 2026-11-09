@@ -7,7 +7,9 @@ use crate::shift::{Rotation, ShiftAction};
 use crate::wide::{WideOp, WideOperand};
 
 pub const MAX_PROGRAM_WORDS: usize = 15_872;
-pub const MAX_EXECUTABLE_INSTRUCTIONS: usize = 512;
+/// Source/expanded instruction budget: bounded only by the program region (one WORD at least
+/// per instruction), not by an arbitrary first-version cap.
+pub const MAX_EXECUTABLE_INSTRUCTIONS: usize = MAX_PROGRAM_WORDS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreflightCheck {
@@ -156,7 +158,7 @@ fn encode_layout(
     transform_profile: crate::data_transform::NativeTransformProfile,
 ) -> Result<BuiltLayout, String> {
     if program.instructions > MAX_EXECUTABLE_INSTRUCTIONS {
-        return Err("ES2 encoder supports at most 512 source instructions".into());
+        return Err(format!("ES2 encoder supports at most {MAX_EXECUTABLE_INSTRUCTIONS} source instructions"));
     }
     let mut emitter = Emitter {
         local_layout,
@@ -298,7 +300,7 @@ impl Emitter {
             return Err("An executable instruction cannot have zero WORD length".into());
         }
         if !self.local_layout && self.output.next_pc.len() >= MAX_EXECUTABLE_INSTRUCTIONS {
-            return Err("Expanded ES2 program exceeds 512 executable instructions".into());
+            return Err(format!("Expanded ES2 program exceeds {MAX_EXECUTABLE_INSTRUCTIONS} executable instructions"));
         }
         let end = self
             .output
@@ -4956,12 +4958,47 @@ mod tests {
     #[test]
     fn empty_program_is_end_and_expansion_has_a_budget() {
         assert_eq!(encode(&compile("END").unwrap()).unwrap().words, [0x0F00]);
+        // Far beyond the old 512-instruction first-version cap: still encodes.
         let source = format!("LD X0\n{}OUT Y0\nEND", "AND X1\n".repeat(300));
+        assert!(encode(&compile(&source).unwrap()).unwrap().words.len() > 600);
+        // One giant network is refused before recursive passes could overflow the stack.
+        let source = format!("LD X0\n{}OUT Y0\nEND", "AND X1\n".repeat(8000));
+        let err = compile(&source).unwrap_err();
+        assert!(err.message.contains("ağ"), "{err:?}");
+        // The program region (15872 WORDs) is the real budget for many small networks.
+        let source = format!("{}END", "LD X0\nOUT Y0\n".repeat(8000));
+        let err = match compile(&source) {
+            Err(d) => d.message,
+            Ok(p) => encode(&p).unwrap_err(),
+        };
         assert!(
-            encode(&compile(&source).unwrap())
-                .unwrap_err()
-                .contains("512 executable")
+            err.contains("executable") || err.contains("15872") || err.contains("program alanı"),
+            "{err}"
         );
+    }
+
+    #[test]
+    fn a_large_real_world_sized_program_compiles_encodes_and_scans() {
+        // About 3000 instructions (a typical 6-8k step machine program).
+        let mut source = String::new();
+        for i in 0..500 {
+            source.push_str(&format!(
+                "LD X{}\nOR M{i}\nANI X{}\nOUT M{i}\nLD M{i}\nMOV K{i} D{i}\n",
+                i % 8,
+                (i + 1) % 8
+            ));
+        }
+        source.push_str("END");
+        let started = std::time::Instant::now();
+        let program = compile(&source).unwrap();
+        let encoded = encode(&program).unwrap();
+        let mut sim = crate::plc::Simulator::default();
+        sim.memory.set_input("X0".parse().unwrap(), true);
+        sim.scan(&program, 100);
+        assert!(sim.memory.bit("M0".parse().unwrap()));
+        assert_eq!(sim.memory.word("D8".parse().unwrap()), 8);
+        assert!(encoded.words.len() > 3000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
     }
 }
 

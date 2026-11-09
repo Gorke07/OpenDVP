@@ -143,6 +143,9 @@ pub struct Layout {
     pub ranges: Vec<(usize, usize)>,
     /// For an ST program: the ST source line of each of its IL lines (`None` for IL).
     pub maps: Vec<Option<Vec<usize>>>,
+    /// Shared block bodies of ST programs, placed after `FEND`: program index, line range
+    /// and the ST source line of each IL line.
+    pub shared: Vec<(usize, (usize, usize), Vec<usize>)>,
     /// ST programs that failed to lower (program index, diagnostic in ST lines).
     pub errors: Vec<(usize, crate::plc::Diagnostic)>,
 }
@@ -154,6 +157,13 @@ pub struct Located {
     pub message: String,
 }
 fn locate_in(layout: &Layout, line: usize) -> Option<(usize, usize)> {
+    if let Some((index, (start, _), map)) = layout
+        .shared
+        .iter()
+        .find(|(_, (start, end), _)| line >= *start && line <= *end)
+    {
+        return Some((*index, map.get(line - start).copied().unwrap_or(1)));
+    }
     let (index, (start, _)) = layout
         .ranges
         .iter()
@@ -175,6 +185,19 @@ fn is_il(language: &SourceLanguage) -> bool {
     *language == SourceLanguage::Il
 }
 const MAX_UNITS: usize = 64;
+
+/// Does IL source name the index registers E6 / E7 (`E6`, `D10E7`, `K4M0E6` …)?
+fn uses_shared_index_registers(source: &str) -> bool {
+    source
+        .lines()
+        .map(|l| l.split(';').next().unwrap_or(""))
+        .flat_map(str::split_whitespace)
+        .any(|word| {
+            let w = word.to_ascii_uppercase();
+            (w.ends_with("E6") || w.ends_with("E7"))
+                && (w.len() == 2 || w.as_bytes()[w.len() - 3].is_ascii_digit())
+        })
+}
 
 fn strip_end(source: &str) -> String {
     let mut lines: Vec<&str> = source.lines().collect();
@@ -503,6 +526,9 @@ pub struct Project {
     /// Latched ranges for retained symbols and `VAR_RETAIN` variables.
     #[serde(default, skip_serializing_if = "retain_is_default")]
     pub retain: crate::alloc::Retain,
+    /// Named parameter sets; empty for projects saved before recipes existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recipes: Vec<crate::recipes::Recipe>,
 }
 impl Default for Project {
     fn default() -> Self {
@@ -523,6 +549,7 @@ impl Default for Project {
             symbols: BTreeMap::new(),
             alloc: crate::alloc::Alloc::default(),
             retain: crate::alloc::Retain::default(),
+            recipes: Vec::new(),
         }
     }
 }
@@ -570,6 +597,7 @@ impl Project {
             reserved: Vec::new(),
             label_start: 0,
             avoid_labels: Vec::new(),
+            share: crate::st::Share::default(),
             alloc: self.alloc,
             retain: self.retain,
             globals: self
@@ -928,6 +956,7 @@ impl Project {
                 il,
                 ranges: vec![(1, lines)],
                 maps: vec![None],
+                shared: Vec::new(),
                 errors: Vec::new(),
             };
         }
@@ -958,12 +987,28 @@ impl Project {
         let mut maps: Vec<Option<Vec<usize>>> = vec![None; count];
         let mut errors = Vec::new();
         let mut pieces: Vec<String> = Vec::with_capacity(count);
+        // Shared block bodies of each ST program (IL after its FEND, and its line map).
+        let mut subroutines: Vec<(usize, String, Vec<usize>)> = Vec::new();
+        // Shared bodies keep their instance bases in E6 / E7; an IL program using them
+        // would change them under a shared body.
+        let il_uses_e6_e7 = (0..count).any(|index| {
+            self.program_language(index) == SourceLanguage::Il
+                && uses_shared_index_registers(source_of(index))
+        });
         for index in 0..count {
             let wanted = index == 0 || active(index - 1, &self.units[index - 1]);
             if !wanted || self.program_language(index) == SourceLanguage::Il {
                 pieces.push(source_of(index).to_owned());
                 continue;
             }
+            // An interrupt could fire inside a shared body and change E6 / E7 under it.
+            options.share = if il_uses_e6_e7
+                || index > 0 && self.units[index - 1].kind == UnitKind::Interrupt
+            {
+                crate::st::Share::Never
+            } else {
+                crate::st::Share::default()
+            };
             match crate::st::lower_with(source_of(index), &options) {
                 Ok(lowered) => {
                     for symbol in lowered.symbols.iter().filter(|s| !s.explicitly_mapped) {
@@ -987,9 +1032,22 @@ impl Project {
                             }
                         }
                     }
+                    for device in &lowered.temporaries {
+                        options.reserved.push((*device, 1));
+                    }
                     options.label_start = lowered.next_label;
-                    maps[index] = Some(lowered.line_map);
-                    pieces.push(lowered.il);
+                    let lines: Vec<&str> = lowered.il.lines().collect();
+                    let main = lowered.main_lines.min(lines.len());
+                    // After the body: FEND, the shared bodies, END.
+                    if lines.len() > main + 2 {
+                        let body = lines[main + 1..lines.len() - 1].join("\n") + "\n";
+                        let map = lowered.line_map[main + 1..lines.len() - 1].to_vec();
+                        subroutines.push((index, body, map));
+                    }
+                    let mut map = lowered.line_map;
+                    map.truncate(main);
+                    maps[index] = Some(map);
+                    pieces.push(lines[..main].join("\n") + "\n");
                 }
                 Err(diagnostic) => {
                     errors.push((index, diagnostic));
@@ -1025,11 +1083,18 @@ impl Project {
                 il.push('\n');
             }
         }
+        let mut shared = Vec::new();
+        for (index, body, map) in subroutines {
+            let start = line_count(&il) + 1;
+            il.push_str(&body);
+            shared.push((index, (start, start + line_count(&body) - 1), map));
+        }
         il.push_str("END\n");
         Layout {
             il: resolve_symbols(&il, &devices),
             ranges,
             maps,
+            shared,
             errors,
         }
     }
@@ -1384,6 +1449,7 @@ impl Project {
             return Err(format!("Bilinmeyen PLC modeli: {}", self.device));
         }
         crate::hardware::assign(&self.hardware)?;
+        crate::recipes::validate(&self.recipes)?;
         if self.comments.len() > 8192 {
             return Err("Cihaz açıklaması sayısı 8192 sınırını aşıyor".into());
         }
@@ -1437,11 +1503,32 @@ impl Project {
             // Delta editor program: the program image becomes IL; device comments go to the
             // project's comment table.
             let file = crate::dvp_file::read(&fs::read(path).map_err(|e| e.to_string())?)?;
-            let source = crate::es2_program_decode::decode(&file.program)
+            // Preserve the file's target instead of inheriting Default's ES2.
+            // Unknown/unsupported targets must not silently become another PLC.
+            let device = file
+                .model_name()
+                .and_then(crate::devices::find)
+                .ok_or_else(|| {
+                    format!(
+                        "DVP dosyasının PLC modeli desteklenmiyor: {} (kod 0x{:04X})",
+                        file.model_name().unwrap_or("bilinmeyen"),
+                        file.model_code
+                    )
+                })?
+                .id
+                .to_owned();
+            // The editor saves its own instruction form. Files written by `export_dvp`
+            // carry PLC memory words (es2_encoder), which that decoder rejects
+            // (`xxF0` blocks, 0x84/0x84 bit tags, 0x80 TMR targets), so they fall back.
+            let source = crate::dvp_decode::decode(&file.program)
+                .or_else(|editor_error| {
+                    crate::es2_program_decode::decode(&file.program).map_err(|_| editor_error)
+                })
                 .map_err(|e| format!("Delta editor programı IL'e çözülemedi: {e}"))?;
             let mut project = Self {
                 name,
                 source,
+                device,
                 language: SourceLanguage::Il,
                 watch: Vec::new(),
                 ..Self::default()
@@ -1548,6 +1635,9 @@ impl Project {
             );
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        if json.len() > 1024 * 1024 {
+            return Err("Proje dosyası 1 MiB sınırını aşıyor; reçete veya program boyutunu azaltın.".into());
+        }
         write_atomic(path, json.as_bytes())
     }
     /// Source export never changes project metadata or substitutes generated IL
@@ -2342,14 +2432,34 @@ END_PROGRAM
         p.set_unit_language(second, SourceLanguage::St).unwrap();
         p.set_program_source(second, ST_COUNTER.replace("Counter", "Other").replace('n', "m").replace("PROGRAM Other", "PROGRAM Other"));
         let il = p.instruction_list().unwrap();
-        assert!(il.contains("D4000") && il.contains("D4001"), "two locals, two devices: {il}");
+        // The second unit's local sits after the first unit's local and temporaries.
+        let second_local = il
+            .split("FEND")
+            .next()
+            .unwrap()
+            .rsplit("P1\n")
+            .next()
+            .unwrap()
+            .lines()
+            .find(|l| l.starts_with("LD") && l.ends_with(" K3"))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .unwrap_or_else(|| panic!("{il}"))
+            .to_owned();
+        assert_ne!(second_local, "D4000", "two locals, two devices: {il}");
         let program = p.compile().unwrap_or_else(|e| panic!("{e:?}\n{il}"));
         let mut sim = Simulator::default();
+        let word = |sim: &Simulator, n: &str| sim.memory.word(n.parse::<Device>().unwrap());
+        // Give the counters different phases: a shared word would show up as equal values.
+        sim.memory
+            .set_word(second_local.parse::<Device>().unwrap(), 2);
         for _ in 0..3 {
             sim.scan(&program, 0);
         }
-        let word = |n: &str| sim.memory.word(n.parse::<Device>().unwrap());
-        assert_eq!((word("D4000"), word("D4001")), (3, 3), "each unit counts on its own local");
+        assert_eq!(
+            (word(&sim, "D4000"), word(&sim, &second_local)),
+            (3, 1),
+            "each unit counts on its own local\n{il}"
+        );
     }
     #[test]
     fn an_st_unit_error_is_reported_in_its_own_program_and_line() {
@@ -2392,6 +2502,94 @@ END_PROGRAM
         assert_eq!(p.program_language(sub), SourceLanguage::Il);
     }
 
+    /// A `.dvp` in the editor's own form (synthetic words: single-word AND/OR, `xxFF` blocks,
+    /// edge contacts, STL) opens as IL, and the decimal X/Y comment rows map to octal names.
+    #[test]
+    fn an_editor_form_dvp_file_opens_as_il() {
+        let words = [
+            0xea2b, 0x00d0, // LD M1002, SET S0
+            0x00a0, 0x0024, 0x0124, 0x0344, 0xf9ff, 0x0154, 0x10c5, // STL S0 .. OUT Y20
+            0x0101, 0x1084, 0x0480, 0x14d0, // LDP X20, SET S20
+            0x14a0, 0x0124, 0x00c0, 0x0e00, // STL S20, LD X1, OUT S0, RET
+            0x0f00,
+        ];
+        let comments = [("X16".to_owned(), "start".to_owned())];
+        let path = std::env::temp_dir().join(format!("opendvp-editor-form-{}.dvp", std::process::id()));
+        // write() takes the words verbatim; the comment row is stored decimal (X16 = X20).
+        let mut bytes = crate::dvp_file::write(&words, "Synthetic", &[]).unwrap();
+        let marker = b"Function=Device Comment\n<TypeEnd>\n<DataBegin>\n";
+        let at = bytes.windows(marker.len()).position(|w| w == marker).unwrap() + marker.len();
+        bytes.splice(at..at, b"X16$&start\n".iter().copied());
+        std::fs::write(&path, &bytes).unwrap();
+        let p = Project::load(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            p.source,
+            "LD M1002\nSET S0\nSTL S0\nLD X0\nLD X1\nAND X3\nORB\nANI X1\nOUT Y20\nLDP X20\nSET S20\nSTL S20\nLD X1\nOUT S0\nRET\nEND\n"
+        );
+        assert_eq!(p.comment("X20".parse().unwrap()), Some(comments[0].1.as_str()));
+    }
+
+    #[test]
+    fn dvp_import_preserves_supported_models_in_both_instruction_formats() {
+        let source = "LD X0\nAND X1\nOUT Y0\nEND\n";
+        let native = crate::es2_encoder::encode(&crate::plc::compile(source).unwrap())
+            .unwrap()
+            .words;
+        // Single-word editor AND versus the PLC encoder's LD/ANB form. Exercise
+        // both import decoders, rather than a program common to both formats.
+        let editor = vec![0x0024, 0x0144, 0x00c5, 0x0f00];
+        assert!(crate::dvp_decode::decode(&native).is_err());
+        assert!(crate::dvp_decode::decode(&editor).is_ok());
+        for &(model, code) in crate::dvz::MODEL_INDICES {
+            if crate::devices::find(model).is_none() {
+                continue;
+            }
+            for (format, words) in [("editor", &editor), ("plc", &native)] {
+                let path = std::env::temp_dir().join(format!(
+                    "opendvp-dvp-model-{}-{code}-{format}.dvp",
+                    std::process::id()
+                ));
+                let saved = path.with_extension("odvp");
+                let mut bytes = crate::dvp_file::write(
+                    words,
+                    "Model import",
+                    &[("Y0".into(), "motor".into())],
+                )
+                .unwrap();
+                // Model metadata is separate from the program checksum/key.
+                bytes[0x54..0x56].copy_from_slice(&code.to_le_bytes());
+                fs::write(&path, bytes).unwrap();
+                let project = Project::load(&path).unwrap();
+                assert_eq!(project.device, model, "{format} model 0x{code:04X}");
+                assert_eq!(project.language, SourceLanguage::Il);
+                assert_eq!(project.comment("Y0".parse().unwrap()), Some("motor"));
+                assert_eq!(project.compile().unwrap().networks.len(), 1);
+                project.save(&saved).unwrap();
+                assert_eq!(Project::load(&saved).unwrap().device, model);
+                fs::remove_file(&path).unwrap();
+                fs::remove_file(&saved).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn dvp_import_rejects_unsupported_or_unknown_models_instead_of_defaulting_to_es2() {
+        for (code, label) in [(0x12u16, "MC"), (0xffff, "bilinmeyen")] {
+            let path = std::env::temp_dir().join(format!(
+                "opendvp-dvp-unsupported-{}-{code}.dvp",
+                std::process::id()
+            ));
+            let mut bytes = crate::dvp_file::write(&[0x0024, 0x00c5, 0x0f00], "", &[]).unwrap();
+            bytes[0x54..0x56].copy_from_slice(&code.to_le_bytes());
+            fs::write(&path, bytes).unwrap();
+            let error = Project::load(&path).unwrap_err();
+            assert!(error.contains(label), "{error}");
+            assert!(error.contains(&format!("0x{code:04X}")), "{error}");
+            fs::remove_file(&path).unwrap();
+        }
+    }
+
     #[test]
     fn a_project_exports_as_a_editor_dvp_file_that_reads_back() {
         let mut p = Project {
@@ -2401,14 +2599,21 @@ END_PROGRAM
         };
         p.set_comment("X0".parse().unwrap(), "start button");
         p.set_comment("Y0".parse().unwrap(), "motor");
-        p.set_comment("X17".parse().unwrap(), "beyond what the writer can place");
+        p.set_comment("X17".parse().unwrap(), "octal name, decimal grid row");
         let path = std::env::temp_dir().join(format!("opendvp-export-{}.dvp", std::process::id()));
         let skipped = p.export_dvp(&path).unwrap();
-        assert_eq!(skipped, 1, "X17 is not a number the writer can place yet");
+        assert_eq!(skipped, 0);
         let file = crate::dvp_file::read(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(file.program, vec![0x0024, 0x00c5, 0x0f00]);
         assert_eq!(file.title.chars().count(), 20, "titles are cut to 20 characters");
         assert!(file.device_comments.iter().any(|(d, t)| d == "X0" && t == "start button"));
+        assert!(file.device_comments.iter().any(|(d, _)| d == "X17"));
+        let loaded = Project::load(&path).unwrap();
+        assert_eq!(loaded.source, "LD X0\nOUT Y0\nEND\n");
+        assert_eq!(
+            loaded.comment("X17".parse().unwrap()),
+            Some("octal name, decimal grid row")
+        );
         // export_source routes by extension and the project can be read back as IL.
         assert!(p.export_source(&path).is_ok());
         std::fs::remove_file(&path).unwrap();

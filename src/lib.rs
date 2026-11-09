@@ -49,6 +49,7 @@ pub mod drive_comm;
 #[cfg(test)]
 mod drive_knob_integration_tests;
 pub mod drum;
+pub mod dvp_decode;
 pub mod dvp_file;
 pub mod dvz;
 pub mod es2_bridge;
@@ -79,6 +80,7 @@ pub mod float_ops;
 pub mod ftc;
 pub mod gps;
 pub mod hardware;
+pub mod recipes;
 pub mod high_speed;
 #[cfg(test)]
 mod high_speed_integration_tests;
@@ -171,6 +173,7 @@ pub mod alloc;
 pub mod plc_control;
 pub mod program_pack;
 pub mod plc_force;
+pub mod plc_monitor;
 pub mod plc_modules;
 pub mod plc_program_transfer;
 pub mod power_monitor;
@@ -337,5 +340,17 @@ pub mod indexed_float_binary;
 mod indexed_float_binary_vm_tests;
 #[cfg(test)]
 mod st_array_tests;
+#[cfg(test)]
+mod st_blocks_tests;
+#[cfg(test)]
+mod st_stdlib_logic_tests;
+#[cfg(test)]
+mod st_stdlib_math_tests;
+#[cfg(test)]
+mod st_stdlib_control_tests;
+#[cfg(test)]
+mod st_stdlib_process_tests;
+#[cfg(test)]
+mod st_share_tests;
 #[cfg(test)]
 mod st_retain_tests;

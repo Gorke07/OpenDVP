@@ -78,7 +78,9 @@ fn mapped_array_with_lower_bound_beyond_its_base_uses_a_runtime_subtract() {
     );
     assert!(l.il.contains("SUB"), "{}", l.il);
     assert_eq!(
-        (0..4).map(|k| word(&s, &format!("D{}", 10 + k))).collect::<Vec<_>>(),
+        (0..4)
+            .map(|k| word(&s, &format!("D{}", 10 + k)))
+            .collect::<Vec<_>>(),
         vec![1, 2, 3, 4]
     );
 }
@@ -151,15 +153,16 @@ fn bool_arrays_with_constant_indices() {
     assert!(s.memory.bit("Y0".parse().unwrap()));
     let a = l.symbols.iter().find(|x| x.name == "F").unwrap();
     assert!(a.address.starts_with('M'));
-    assert!(
-        error("VAR f : ARRAY[0..3] OF BOOL; i : INT; END_VAR f[i] := TRUE;")
-            .contains("BOOL dizisinde")
-    );
+    // A variable index is allowed (M<base>E0).
+    lower("VAR f : ARRAY[0..3] OF BOOL; i : INT; END_VAR f[i] := TRUE;").unwrap();
 }
 #[test]
 fn constant_index_out_of_range_is_a_compile_error() {
     let m = error("VAR a : ARRAY[1..4] OF INT; END_VAR a[5] := 1;");
-    assert!(m.contains("a[5]".to_uppercase().as_str()) && m.contains("1..4"), "{m}");
+    assert!(
+        m.contains("a[5]".to_uppercase().as_str()) && m.contains("1..4"),
+        "{m}"
+    );
     assert!(error("VAR a : ARRAY[1..4] OF INT; x : INT; END_VAR x := a[0];").contains("A[0]"));
     assert!(error("VAR a : ARRAY[1..4] OF INT; x : INT; END_VAR x := a[-1];").contains("A[-1]"));
     // The upper bound itself is fine.
@@ -180,7 +183,7 @@ fn declaration_errors() {
     assert!(error("VAR a : ARRAY[0..3] OF INT; r : REAL; END_VAR a[r] := 1;").contains("INT"));
     assert!(error("VAR a AT D4998 : ARRAY[0..3] OF INT; END_VAR").contains("D4999"));
     assert!(error("VAR a AT Y0 : ARRAY[0..3] OF BOOL; END_VAR").contains("M adresine"));
-    assert!(error("VAR a : ARRAY[0..3] OF STRING; END_VAR").contains("veri tipi"));
+    assert!(error("VAR a : ARRAY[0..3] OF STRING; END_VAR").contains("STRING dizisi"));
 }
 #[test]
 fn explicitly_mapped_arrays_are_reserved_from_automatic_allocation() {

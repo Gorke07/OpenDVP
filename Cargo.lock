@@ -4338,8 +4338,9 @@ dependencies = [
 
 [[package]]
 name = "opendvp"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
+ "anyhow",
  "async-trait",
  "aws-lc-sys",
  "embed-resource",
@@ -4350,6 +4351,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "http",
+ "lsp-types",
  "miniz_oxide 0.8.9",
  "rfd",
  "rust-i18n",

@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "name": "Reçete örneği",
+  "model": "DVP-ES2 / offline subset",
+  "device": "ES2",
+  "language": "il",
+  "source": "; Önce bir reçeteyi yerel simülatöre uygulayın.\n; X0 başlatır, M10 reçetedeki izin bitidir.\nLD X0\nAND M10\nOUT Y0\n\n; D102 gecikmesi 100 ms birimindedir.\nLD Y0\nTMR T0 D102\n\nLD T0\nOUT Y1\nEND\n",
+  "watch": ["X0", "M10", "Y0", "Y1", "D100", "D102", "D104", "D105"],
+  "hardware": ["DVP08SM11N", "DVP04AD-E2"],
+  "recipes": [
+    {
+      "name": "Ürün A",
+      "parameters": [
+        {"name": "Hız referansı", "target": "D100", "ty": "int", "value": "750", "unit": "rpm", "min": "0", "max": "1500"},
+        {"name": "Başlatma gecikmesi", "target": "D102", "ty": "int", "value": "30", "unit": "100 ms", "min": "0", "max": "600"},
+        {"name": "Ölçek katsayısı", "target": "D104", "ty": "real", "value": "1.5", "min": "0.1", "max": "10"},
+        {"name": "Çalışma izni", "target": "M10", "ty": "bool", "value": "TRUE"}
+      ]
+    },
+    {
+      "name": "Ürün B",
+      "parameters": [
+        {"name": "Hız referansı", "target": "D100", "ty": "int", "value": "1200", "unit": "rpm", "min": "0", "max": "1500"},
+        {"name": "Başlatma gecikmesi", "target": "D102", "ty": "int", "value": "50", "unit": "100 ms", "min": "0", "max": "600"},
+        {"name": "Ölçek katsayısı", "target": "D104", "ty": "real", "value": "2.25", "min": "0.1", "max": "10"},
+        {"name": "Çalışma izni", "target": "M10", "ty": "bool", "value": "TRUE"}
+      ]
+    }
+  ]
+}

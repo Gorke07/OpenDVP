@@ -31,13 +31,13 @@ asistanı, yerleşik MCP sunucusu üzerinden aynı çalışma alanını kullanab
 
 ## İndir
 
-`OpenDVP-0.1.0-windows-x64.zip` dosyasını
+`OpenDVP-0.2.0-beta.1-windows-x64.zip` dosyasını
 [Releases sayfasından](https://github.com/Gorke07/OpenDVP/releases) indirin, açın ve
 `opendvp.exe` çalıştırın. Kurulum veya yönetici hakkı gerekmez. SHA-256 değerini aynı
 sürümdeki `SHA256SUMS.txt` ile karşılaştırın:
 
 ```powershell
-Get-FileHash .\OpenDVP-0.1.0-windows-x64.zip -Algorithm SHA256
+Get-FileHash .\OpenDVP-0.2.0-beta.1-windows-x64.zip -Algorithm SHA256
 ```
 
 ## Özellikler
@@ -48,6 +48,9 @@ Get-FileHash .\OpenDVP-0.1.0-windows-x64.zip -Algorithm SHA256
 - **Kaynak editörleri** – IL ve ST; arama (Ctrl+F), cihaz araması, sembol
   adresleri, üretilen IL görünümü ve dışa aktarma. Derleyici ve simülatör
   318 komut ailesini / 600 yazımı kapsar.
+  ST/IL sözdizimi renklendirmesi, çevrimdışı tamamlama (Ctrl+Space), ST değişken ve
+  blok alanı önerileri (`timer.`), temel kod şablonları ve blok üzerinde parametre
+  açıklamaları vardır. ST kütüphanesine kaynak araç çubuğundan ulaşılır.
 - **Structured Text** – `BOOL`, `INT`, `DINT`, `WORD`, `DWORD`, `REAL` ve
   `IF`, `CASE`, `FOR`, `WHILE`, `REPEAT` gibi ifadeler aynı IL yürütme planına
   indirilir. Tam IEC 61131-3 uyumu iddiası yoktur; desteklenmeyen yapılar açık
@@ -60,8 +63,16 @@ Get-FileHash .\OpenDVP-0.1.0-windows-x64.zip -Algorithm SHA256
 - **PLC bağlantısı** – USB/seri ve TCP profilleri, X/Y izleme, SS2 online
   RUN/STOP ve onaylı iki adımlı *program yükleme* (STOP → yaz → geri oku
   doğrula → isteğe bağlı RUN).
+- **Canlı değerler** – kaynak editöründeki *Canlı değerler* paneli tanımlı her
+  ST değişkenini simülatörden veya (salt okunur, yaklaşık 500 ms'de bir) bağlı
+  PLC'den okuyarak gösterir. C200 ve üstü (32-bit sayaçlar) okunmaz.
+- **Denetim** – yazılıp hiç okunmayan veya okunup hiç yazılmayan cihazlar mesaj
+  listesinde bildirilir.
 - **Dosya biçimleri** – `.odvp` (OpenDVP projesi), `.il`, `.st`, `.odmem`;
   ayrıca Delta `.dvp` ve `.isp` proje dosyaları ile EasyDownload `.dvz` içe aktarma.
+  WPLSoft `.dvp` dosyaları WPLSoft'un kendi komut biçiminden, X/Y açıklamalarıyla
+  birlikte çözülür. Program alanının tamamı (15872 word) kullanılabilir; bir ağ en
+  fazla 512 komut içerebilir.
 - **Yerleşik MCP sunucusu** – yapay zeka asistanı komut rehberini okuyabilir,
   ağ düzenleyebilir, derleyebilir, simüle edebilir ve (yalnız açık onayla) PLC'ye
   dokunabilir. Bkz. [MCP sunucusu](#mcp-sunucusu).
@@ -91,7 +102,7 @@ cargo run --locked --release -- examples/motor.il      # açılışta dosya aç
 cargo build --locked --release                         # target\release\opendvp.exe
 ```
 
-Çalıştırılabilir dosya **imzasızdır** (v0.1.0); ilk çalıştırmada Windows SmartScreen uyarı verebilir.
+Çalıştırılabilir dosya **imzasızdır** (v0.2.0-beta.1); ilk çalıştırmada Windows SmartScreen uyarı verebilir.
 İndirdiğiniz sürümü sürümle birlikte yayınlanan SHA-256 değeriyle doğrulayın.
 
 Varsayılan `gpui-ui` özelliği masaüstü uygulamasını derler. İlk derleme GPUI'yi
@@ -118,6 +129,11 @@ garantisi yoktur.
 | Ctrl+K | komut paleti | F3 / Shift+F3 | sonraki / önceki eşleşme |
 | Ctrl+B / Ctrl+J | ağ listesi / denetçi göster-gizle | Ctrl+Z | geri al |
 
+**Çalışma alanı:** Ctrl+Shift+Enter odak modunu açar; yan panelleri ve Ladder alt
+panelini gizler. Ctrl+J Ladder alt panelini açar/kapatır. Panel boyutları ve görünürlük
+tercihleri sonraki açılışta hatırlanır. Program ekleme ve paket işlemleri
+**Program işlemleri**, dil değiştirme ve kaynak dışa aktarma **Kaynak işlemleri** menüsündedir.
+
 ## Structured Text örneği
 
 ```iecst
@@ -136,6 +152,92 @@ END_PROGRAM
 
 X/Y numaraları Delta PLC'lerdeki gibi sekizlik tabandadır (`%IX1.7`, `X17` olur). Daha
 fazla program [`examples/`](examples/) klasöründedir.
+
+**Zamanlayıcı ve sayaçlar** fonksiyon bloğu örnekleridir (`TON`, `TOF`, `TP`, `CTU`, `CTD`, `CTUD`).
+Örneği çağırın, sonra `Q`, `ET` (zamanlayıcı, milisaniye) veya `CV` (sayaç) okuyun:
+
+```iecst
+VAR t : TON; n : CTU; END_VAR
+t(IN := start, PT := T#2s500ms);   delayed := t.Q;
+n(CU := sensor, R := reset, PV := 10);   done := n.Q;   count := n.CV;
+```
+
+Her örnek hedefin bir zamanlayıcısını (T126'dan aşağı) veya sayacını (C111'den aşağı) kullanır;
+`t AT T5 : TON;` ile sabitlenebilir. Sabit `PT` 100 ms'nin katı, sabit `PV` 1..32767 olmalıdır; ikisi için de `INT` değişken/ifade verilebilir (`PT` ms cinsinden, her taramada hesaplanır). `CTUD(CU, CD, R, LD, PV)` çıkışları `QU`, `QD`, `CV`'dir. `INT`/`DINT`/`WORD` değerler açık dönüşüm olmadan `REAL` ile karıştırılabilir (sonuç `REAL`); `REAL` → tamsayı için hâlâ `REAL_TO_INT` gerekir.
+Örnek her taramada çağrılmalıdır (atlanan bir `IF` içine koymayın).
+
+**Fonksiyonlar:** `ABS`, `MIN`, `MAX`, `LIMIT(mn, in, mx)`, `SEL(g, in0, in1)`, `SQRT` (REAL) ve
+açık dönüşümler: `INT_TO_REAL`, `DINT_TO_REAL`, `WORD_TO_REAL`, `REAL_TO_INT`, `REAL_TO_DINT`,
+`INT_TO_DINT`, `DINT_TO_INT` (alt word kalır), `INT_TO_WORD`, `WORD_TO_INT`, `WORD_TO_DWORD`,
+`DWORD_TO_WORD`, `DINT_TO_DWORD`, `DWORD_TO_DINT` ve `INT/DINT/WORD/DWORD/REAL` çiftleri.
+`REAL_TO_INT` hedefte olduğu gibi sıfıra doğru keser. `INT`/`DINT`/`WORD` ile `REAL` açık dönüşüm
+olmadan karıştırılabilir. Örnek: [`examples/st-timers-counters.st`](examples/st-timers-counters.st).
+
+**Veri tipleri:**
+- `TYPE Axis : STRUCT pos : REAL; speed : INT := 100; END_STRUCT END_TYPE` sonra `x : Axis;` — her alan `x.pos`,
+  `x.speed` adlı sıradan bir değişken olur (iç içe yapı, dizi ve zamanlayıcı/sayaç alanları çalışır; yapı değişkeninin
+  kendisi `AT` veya başlangıç değeri almaz, alanlar kendi varsayılanlarını taşır).
+- `STRING[n]` (varsayılan 32 karakter): `s := 'metin'`, `s := diger`, `s = 'x'`, `s <> t`, `LEN(s)`. Dize, `D`
+  belleğinde bir uzunluk word'ü ve paketlenmiş karakterlerden (word başına iki, önce düşük bayt) oluşur;
+  birleştirme ve karakter indeksleme yoktur.
+- Dizi başlangıç değerleri: `ARRAY[0..3] OF INT := [10, 20, 2(30)];` (`n(v)`, `v`'yi n kez tekrarlar).
+- `BOOL` dizileri değişken indeks alır (`stage[i] := TRUE;`, `M<taban>E0` ile; çalışma anında sınır denetimi yoktur).
+- `REAL` için `MOD` vardır (`a - b * trunc(a / b)`; bölüm `DINT` aralığında olmalı).
+
+Örnek: [`examples/st-data-types.st`](examples/st-data-types.st).
+
+**Fonksiyon blokları ve fonksiyonlar:** `VAR_INPUT` / `VAR_OUTPUT` / `VAR` bölümlü `FUNCTION_BLOCK ad`
+(`END_FUNCTION_BLOCK`) ve sonucunu `ad` değişkeniyle döndüren `FUNCTION ad : TİP`. Her örnek kendi durumunu tutar;
+çağrı normalde çağrıldığı yerde açılır. Bir blok tipinin iki veya daha çok örneği varsa derleyici *paylaşımlı* bir
+biçim de üretir ve program küçülüyorsa onu seçer: gövde `FEND`'den sonra bir kez alt program (`CALL`/`SRET`) olarak
+yazılır, her örneğin değişkenleri aynı ofsetlerde durur ve E6 (word) / E7 (bit) indeks yazmaçlarıyla erişilir; Delta
+zamanlayıcı ve sayaçları indeksle adreslenemediği için her örnek kendi `TMR`/`CNT` komutunu `CALL`'ların arasında
+çalıştırır. Zamanlayıcıyı `IF` içinde çağıran, dizi, STRING veya `VAR_RETAIN` değişkeni olan bloklar ve kesme
+programlarındaki bloklar ve projedeki bir IL programı E6/E7 kullanıyorsa bütün bloklar her zaman açılır. `VAR_IN_OUT`,
+blok içinde `RETURN`, özyineleme ve `WHILE`/`REPEAT`/`ELSIF` koşulunda fonksiyon çağrısı desteklenmez.
+
+```iecst
+FUNCTION_BLOCK Motor
+VAR_INPUT start, stop : BOOL; END_VAR
+VAR_OUTPUT run : BOOL; END_VAR
+run := (start OR run) AND NOT stop;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR m1 : Motor; END_VAR
+m1(start := X0, stop := X1);  Y0 := m1.run;
+END_PROGRAM
+```
+
+**Standart kütüphane:** dört grupta 130 hazır blok (77 fonksiyon bloğu, 53 fonksiyon) — mantık ve zamanlama
+(`R_TRIG`, `SR`, `BLINK`, `DEBOUNCE`, `TON_SEC`, `TON_DSEC`, `SEQUENCER`, `OP_MODE`, `RECIPE_STEP` …), matematik ve
+dönüşüm (`SCALE`, `SCALE_I2I`, `CURVE8`, `ROUND`, `GET_BIT`, `BCD_TO_INT` …), kontrol (`HYSTERESIS`, `TWO_POINT`,
+`RAMP`, `LOWPASS`, `PID`, `PWM`, `STEP3`, `AIN` …) ve proses ekipmanı (`MOTOR`, `STAR_DELTA`, `VALVE`, `CYLINDER`,
+`AXIS_2SPEED`, `HYD_PUMP`, `STACK_LIGHT`, `HEATER`, `SOAK_TIMER`, `ALARM`, `TANK` …). Tanımlamadan kullanılırlar;
+programa yalnızca kullanılan bloklar derlenir. Zamanlayıcı veya sayaç içeren bir blok, her örneği için gerçek bir
+`T`/`C` cihazı kullanır ve her taramada çağrılmalıdır. Açıklamalardaki boyut, açılmış tek bir çağrınınkidir;
+`cargo run --example st_library_size` her bloğu açılmış ve paylaşımlı olarak listeler. **ST kütüphanesi** sekmesi her bloğu
+açıklamasıyla (arayüz diline göre Türkçe veya İngilizce) listeler ve programa tanım ile çağrı ekler; MCP aracı
+`st_library` aynı başvuruyu verir. Başvuru:
+[`docs/st-library.md`](docs/st-library.md) (`cargo run --example st_library_doc > docs/st-library.md` ile yeniden üretilir).
+
+## Parametreler ve donanım yardımcıları
+
+**Parametreler / reçeteler:** Proje gezginindeki aynı adlı sayfadan adlandırılmış parametre
+setleri oluşturulur, çoğaltılır ve `.odrecipe` JSON dosyalarıyla içe/dışa aktarılır. Reçeteler
+`.odvp` projesiyle birlikte saklanır. Parametreler `BOOL` için genel amaçlı M, diğer tipler
+(`INT/DINT/WORD/DWORD/REAL`) için D adresi veya atanmış bir proje sembolü kullanır; birim ve
+alt/üst sınır isteğe bağlıdır. Tablo reçete değerini mevcut yerel değerle karşılaştırır.
+Yerel simülasyon durmuşken **Yerel simülatöre uygula** bütün satırları önce doğrular, sonra
+tek işlemde değiştirir; zorlama, adres çakışması veya sınır hatasında hiçbir değer yazılmaz.
+**Yerel değerleri al** mevcut değerlerden reçete oluşturur/günceller. Bu sayfa bağlı PLC'ye
+veya COMMGR simülatörüne reçete yazmaz. Örnek: `examples/recipes.odvp` (Ürün A / Ürün B).
+
+**Donanım yardımcıları:** Cihaz yapılandırmasındaki genişleme adres haritasından dijital
+G/Ç izlemeye eklenebilir ve mevcut açıklamalar korunarak eksik açıklamalar oluşturulabilir.
+Özel modül seçildiğinde FROM/TO yardımcısı CR, D başlangıcı ve kelime sayısından derlenen
+bir IL örneği üretir; kod kopyalanabilir veya **devre dışı** program parçası olarak eklenebilir.
+Yardımcı CR0..48 ve aktarım başına 1..4 kelimeyle sınırlıdır; CR0'a yazma üretilmez. Gerçek
+CR işlevi modül kılavuzundan doğrulanmalıdır; modül sırası değişirse örnek yeniden üretilir.
 
 ## Ayarlar
 

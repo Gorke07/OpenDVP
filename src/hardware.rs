@@ -352,6 +352,30 @@ pub fn extension_devices(modules: &[String]) -> Vec<(char, u16, &'static str)> {
     out
 }
 
+/// A conservative, portable 16-bit transfer template. The helper uses at most
+/// four CR words and CR0..48, common to the existing ES2/SS2 model profiles.
+/// This validates addressing and compilation, not the selected module's CR semantics.
+pub fn transfer_source(modules: &[String], index: usize, read: bool, cr: u16, data: &str, count: u16) -> Result<String, String> {
+    let assignments = assign(modules)?;
+    let Some(Assignment::Special { number }) = assignments.get(index) else {
+        return Err("FROM/TO yardımcısı için özel modül seçin.".into());
+    };
+    if !read && cr == 0 { return Err("CR0 modül tipini bildirir; yazma hedefi olarak kullanılamaz.".into()); }
+    if !(1..=4).contains(&count) || cr.checked_add(count - 1).is_none_or(|end| end > 48) {
+        return Err("Yardımcı CR0..48 ve aktarım başına 1..4 kelime destekler.".into());
+    }
+    let data: crate::plc::Device = data.parse()?;
+    crate::recipes::validate_target(data, crate::st::DataType::Int)?;
+    let end = data.index.checked_add(count - 1).ok_or("D adres aralığı taşıyor.")?;
+    crate::recipes::validate_target(crate::plc::Device { index: end, ..data }, crate::st::DataType::Int)?;
+    if data.index <= 1999 && end >= 1000 { return Err("D aktarımı özel sistem alanıyla çakışıyor.".into()); }
+    let name = &modules[index];
+    let op = if read { "FROM" } else { "TO" };
+    let source = format!("; {name} / slot {} / K{number}\nLD M1000\n{op} K{number} K{cr} {data} K{count}\nEND\n", index + 2);
+    crate::plc::compile(&source).map_err(|e| e.to_string())?;
+    Ok(source)
+}
+
 /// One special-module slot in a configuration/PLC comparison.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecialSlot {
@@ -522,5 +546,19 @@ mod tests {
         assert_eq!(devices.len(), 16);
         assert_eq!(devices[0], ('X', 0o20, "DVP16SP11T"));
         assert_eq!(devices[15], ('Y', 0o27, "DVP16SP11T"));
+    }
+
+    #[test]
+    fn transfer_helper_uses_special_number_not_physical_slot() {
+        let modules = names(&["DVP08SM11N", "DVP04AD-E2", "DVP04AD-S2"]);
+        let read = transfer_source(&modules, 2, true, 0, "D100", 1).unwrap();
+        assert!(read.contains("FROM K1 K0 D100 K1"));
+        assert!(crate::plc::compile(&read).is_ok());
+        assert!(transfer_source(&modules, 1, false, 5, "D200", 4).unwrap().contains("TO K0 K5 D200 K4"));
+        assert!(transfer_source(&modules, 0, true, 0, "D100", 1).is_err());
+        assert!(transfer_source(&modules, 1, true, 48, "D100", 2).is_err());
+        assert!(transfer_source(&modules, 1, true, 0, "D9999", 2).is_err());
+        assert!(transfer_source(&modules, 1, true, 0, "D999", 4).is_err());
+        assert!(transfer_source(&modules, 1, false, 0, "D100", 1).is_err());
     }
 }

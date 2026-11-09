@@ -1,5 +1,7 @@
 //! A bounded Structured Text frontend for the existing Delta instruction VM.
+mod blocks;
 mod emit;
+mod library;
 mod syntax;
 #[cfg(test)]
 mod tests;
@@ -64,6 +66,15 @@ pub struct LoweredSt {
     /// One original, one-based ST line for each emitted IL line.
     pub line_map: Vec<usize>,
     pub symbols: Vec<StSymbol>,
+    /// Words and bits the program uses as temporaries. They are rewritten within a scan, so
+    /// another ST program of the project must not place its variables there (sharing them as
+    /// its own temporaries would be safe, but they are simply kept apart).
+    pub temporaries: Vec<crate::plc::Device>,
+    /// Block types whose instances run one shared body.
+    pub shared_blocks: Vec<String>,
+    /// IL lines of the program body; when shared block bodies exist, `FEND`, their
+    /// subroutines and `END` follow, otherwise only `END`.
+    pub main_lines: usize,
     /// First `P` label number the lowering did not use; the next ST program of a project
     /// starts here so the labels of two programs never collide.
     pub next_label: u16,
@@ -96,9 +107,84 @@ pub struct LowerOptions {
     pub label_start: u16,
     /// Label numbers that belong to someone else (subroutine pointers).
     pub avoid_labels: Vec<u16>,
+    /// Whether repeated function-block instances share one subroutine body.
+    pub share: Share,
 }
+/// When the instances of a `FUNCTION_BLOCK` share one body instead of every call being
+/// expanded in place. A shared body is emitted once after `FEND`, split into subroutines at
+/// its timer / `CTU` calls (Delta timers and counters cannot be index-addressed, so each
+/// instance runs its own `TMR` / `CNT` between the `CALL`s); the instance's variables are
+/// reached through the index registers E6 (words) and E7 (bits).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Share {
+    /// Every call is expanded in place.
+    Never,
+    /// Block types with two or more top-level instances are shared when their body allows it
+    /// and sharing makes the program smaller (each such type is measured both ways).
+    #[default]
+    Repeated,
+    /// Every block type with a top-level instance is shared (when its body allows it).
+    Always,
+}
+pub use library::{LibraryEntry, LibraryParam, library_entries, library_errors};
 pub fn lower_with(source: &str, options: &LowerOptions) -> Result<LoweredSt, Diagnostic> {
-    let unit = syntax::parse(source)?;
+    #[allow(unused_mut)]
+    let mut share = options.share;
+    // Lets the whole test suite run with every eligible block shared.
+    #[cfg(test)]
+    if share == Share::Repeated && std::env::var("OPENDVP_ST_SHARE").as_deref() == Ok("always") {
+        share = Share::Always;
+    }
+    let none = std::collections::BTreeSet::new();
+    if share != Share::Repeated {
+        return lower_once(source, options, share, &none);
+    }
+    let all = lower_once(source, options, Share::Repeated, &none);
+    let candidates = match &all {
+        Ok(l) if !l.shared_blocks.is_empty() => l.shared_blocks.clone(),
+        Ok(_) => return all,
+        // A failure of the shared form is not reported if the program lowers without it.
+        Err(_) => return lower_once(source, options, Share::Never, &none).or(all),
+    };
+    // Program words (or the IL line count when the program does not encode) of a lowering.
+    let size = |l: &Result<LoweredSt, Diagnostic>| -> (usize, usize) {
+        let Ok(l) = l else {
+            return (usize::MAX, usize::MAX);
+        };
+        let words = crate::plc::compile_il(&l.il)
+            .ok()
+            .and_then(|p| crate::es2_encoder::encode(&p).ok())
+            .map_or(usize::MAX, |e| e.words.len());
+        (words, l.il.lines().count())
+    };
+    let inline = lower_once(source, options, Share::Never, &none);
+    let base = size(&inline);
+    if candidates.len() == 1 {
+        return if size(&all) <= base { all } else { inline };
+    }
+    // Keep each block type whose sharing alone makes the program smaller.
+    let mut dropped = std::collections::BTreeSet::new();
+    for block in &candidates {
+        let others = candidates.iter().filter(|b| *b != block).cloned().collect();
+        if size(&lower_once(source, options, Share::Repeated, &others)) > base {
+            dropped.insert(block.clone());
+        }
+    }
+    if dropped.len() == candidates.len() {
+        return inline.or(all);
+    }
+    if dropped.is_empty() {
+        return all;
+    }
+    lower_once(source, options, Share::Repeated, &dropped)
+}
+fn lower_once(
+    source: &str,
+    options: &LowerOptions,
+    share: Share,
+    exclude: &std::collections::BTreeSet<String>,
+) -> Result<LoweredSt, Diagnostic> {
+    let unit = syntax::parse(source, share, exclude)?;
     emit::lower(unit, options)
 }
 /// Comments and string contents cannot select the frontend. Explicit project

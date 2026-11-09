@@ -163,7 +163,8 @@ impl Workbench {
                     .when_some(self.scan_card(), |column, card| {
                         column.child(div().mx_3().mb_3().child(card))
                     })
-                    .child(div().mx_3().mb_3().child(properties)),
+                    .child(div().mx_3().mb_3().child(properties))
+                    .child(div().mx_3().mb_3().child(self.hardware_address_map(locked, cx))),
             )
             .child(self.hardware_catalog(locked, cx))
             .into_any_element()
@@ -523,7 +524,93 @@ impl Workbench {
         .child(Self::heading(
             tr("Adresler Delta'nın sağ genişleme numaralandırmasına göre hesaplanır; gerçek PLC'de D1142/D1143 ile doğrulayın."),
         ))
+        .when(module.is_special(), |card| card.child(self.hardware_transfer_view(index, locked, cx)))
         .into_any_element()
+    }
+
+    fn hardware_transfer(&self, index: usize, cx: &App) -> Result<String, String> {
+        let cr = self.extra.hw_cr.read(cx).value().trim().parse().map_err(|_| tr("CR numarası tamsayı olmalı."))?;
+        let count = self.extra.hw_count.read(cx).value().trim().parse().map_err(|_| tr("Kelime sayısı tamsayı olmalı."))?;
+        hardware::transfer_source(&self.project.hardware, index, self.extra.hw_read, cr, &self.extra.hw_data.read(cx).value(), count)
+    }
+
+    fn hardware_transfer_view(&self, index: usize, locked: bool, cx: &mut Context<Self>) -> AnyElement {
+        let preview = self.hardware_transfer(index, cx);
+        let invalid = preview.is_err();
+        let text = preview.unwrap_or_else(|e| e);
+        let field = |label: &'static str, input: &Entity<InputState>| div().w(px(110.)).flex().flex_col().gap_1()
+            .child(Self::heading(label)).child(Input::new(input).aria_label(label).small().disabled(locked));
+        div().mt_3().pt_3().border_t_1().border_color(rgb(LINE)).flex().flex_col().gap_2()
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(tr("FROM / TO yardımcısı")))
+            .child(div().flex().flex_wrap().items_end().gap_2()
+                .child(self.button("hw-transfer-read", tr("Oku · FROM"), locked).ghost().when(self.extra.hw_read, |b| b.primary())
+                    .on_click(cx.listener(|this, _, _, cx| { this.extra.hw_read = true; cx.notify(); })))
+                .child(self.button("hw-transfer-write", tr("Yaz · TO"), locked).ghost().when(!self.extra.hw_read, |b| b.primary())
+                    .on_click(cx.listener(|this, _, _, cx| { this.extra.hw_read = false; cx.notify(); })))
+                .child(field(tr("CR numarası"), &self.extra.hw_cr)).child(field(tr("D başlangıcı"), &self.extra.hw_data)).child(field(tr("Kelime sayısı"), &self.extra.hw_count)))
+            .child(div().p_3().bg(rgb(0xf5f7fa)).font_family("Consolas").text_sm().text_color(rgb(if invalid { ERROR } else { TEXT })).child(text.clone()))
+            .child(div().flex().flex_wrap().gap_2()
+                .child(self.button("hw-transfer-copy", tr("IL kodunu kopyala"), invalid).ghost().on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))))
+                .child(self.button("hw-transfer-add", tr("Devre dışı program olarak ekle"), locked || invalid).on_click(cx.listener(move |this, _, _, cx| {
+                    if this.editing_locked() || this.bridge.is_some() { return; }
+                    let source = match this.hardware_transfer(index, cx) { Ok(s) => s, Err(e) => { this.log(e); return cx.notify(); } };
+                    let mut project = this.project.clone();
+                    let at = match project.add_unit(UnitKind::Cyclic) { Ok(at) => at, Err(e) => { this.log(e); return cx.notify(); } };
+                    project.units[at - 1].source = source;
+                    project.units[at - 1].enabled = false;
+                    if let Err(e) = project.validate() { this.log(e); return cx.notify(); }
+                    this.project = project;
+                    this.dirty = true; this.uploaded = false;
+                    this.compile(); this.select_program(at, cx); this.tab = Tab::Source;
+                    this.log(tr("Donanım kodu devre dışı IL programı olarak eklendi; CR işlevini ve D alanını kontrol edip etkinleştirin."));
+                    cx.notify();
+                }))))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(tr("CR0..48, 1..4 kelime. CR işlevleri modüle göre değişir; modül sırası değişirse kodu yeniden üretin. Bu yardımcı PLC'ye yazmaz.")))
+            .into_any_element()
+    }
+
+    fn hardware_address_map(&self, locked: bool, cx: &mut Context<Self>) -> AnyElement {
+        let assignments = hardware::assign(&self.project.hardware).unwrap_or_default();
+        let mut rows = div().flex().flex_col();
+        for (i, (name, assignment)) in self.project.hardware.iter().zip(assignments).enumerate() {
+            let range = match assignment {
+                Assignment::Digital { inputs, outputs } => [inputs.map(|r| hardware::range_text('X', r)), outputs.map(|r| hardware::range_text('Y', r))].into_iter().flatten().collect::<Vec<_>>().join(" · "),
+                Assignment::Special { number } => format!("K{number} · CR (FROM / TO)"),
+            };
+            rows = rows.child(div().flex().flex_wrap().items_center().gap_3().py_2().border_b_1().border_color(rgb(LINE))
+                .child(div().w(px(50.)).child(format!("{}", i + 2)))
+                .child(div().w(px(155.)).font_weight(FontWeight::SEMIBOLD).child(name.clone()))
+                .child(div().flex_1().min_w(px(120.)).font_family("Consolas").child(range))
+                .child(Button::new(("hw-map-select", i)).label(tr("Seç")).small().ghost()
+                    .on_click(cx.listener(move |this, _, _, cx| { this.extra.hw_selected = Some(i); cx.notify(); }))));
+        }
+        if self.project.hardware.is_empty() { rows = rows.child(div().py_3().text_color(rgb(MUTED)).child(tr("Katalogdan modül eklediğinizde adres haritası burada oluşur."))); }
+        properties_card(tr("Genişleme adres haritası")).child(rows)
+            .child(div().flex().flex_wrap().gap_2()
+                .child(self.button("hw-map-watch", tr("Dijital G/Ç'yi izlemeye ekle"), locked || self.project.hardware.is_empty())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.editing_locked() || this.bridge.is_some() { return; }
+                        let mut next = this.project.watch.clone();
+                        for (prefix, index, _) in hardware::extension_devices(&this.project.hardware) {
+                            let device = format!("{prefix}{index:o}");
+                            if !next.iter().any(|d| d.eq_ignore_ascii_case(&device)) { next.push(device); }
+                        }
+                        if next.len() > 64 { this.log(tr("İzleme tablosu 64 cihaz sınırını aşar; önce bazı cihazları kaldırın.")); return cx.notify(); }
+                        this.project.watch = next; this.dirty = true; this.tab = Tab::Watch; cx.notify();
+                    })))
+                .child(self.button("hw-map-comments", tr("Eksik G/Ç açıklamalarını oluştur"), locked || self.project.hardware.is_empty()).ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.editing_locked() || this.bridge.is_some() { return; }
+                        let mut count = 0;
+                        for (prefix, index, module) in hardware::extension_devices(&this.project.hardware) {
+                            let device: Device = format!("{prefix}{index:o}").parse().unwrap();
+                            if this.project.comment(device).is_none() {
+                                this.project.set_comment(device, &format!("{module} · {device}")); count += 1;
+                            }
+                        }
+                        this.hardware_changed(tfmt!("{count} cihaz açıklaması oluşturuldu.", "Created {count} device comments."), cx);
+                    }))))
+            .into_any_element()
     }
 
     fn hardware_catalog(&self, locked: bool, cx: &mut Context<Self>) -> AnyElement {

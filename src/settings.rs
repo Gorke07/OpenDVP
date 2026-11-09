@@ -38,6 +38,12 @@ pub struct Settings {
     pub plc_read_only: bool,
     /// Dark colour theme.
     pub dark: bool,
+    /// Keep the workspace panel visibility between launches.
+    pub focus_mode: bool,
+    pub inspector_open: bool,
+    pub panel_tree_width: u16,
+    pub panel_tools_width: u16,
+    pub panel_bottom_height: u16,
 }
 
 pub const POLL_MIN: u64 = 20;
@@ -46,7 +52,7 @@ pub const RECENT_MAX: usize = 8;
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { backup_on_save: true, poll_ms: 50, reopen_last: false, last_project: None, mcp_server: true, mcp_port: 8765, mcp_lan: true, mcp_token: String::new(), ui_scale: 100, autosave_min: 5, recent: Vec::new(), default_dir: None, new_model: "ES2".into(), new_st: false, scan_ms: 20, plc_read_only: false, dark: false }
+        Self { backup_on_save: true, poll_ms: 50, reopen_last: false, last_project: None, mcp_server: true, mcp_port: 8765, mcp_lan: true, mcp_token: String::new(), ui_scale: 100, autosave_min: 5, recent: Vec::new(), default_dir: None, new_model: "ES2".into(), new_st: false, scan_ms: 20, plc_read_only: false, dark: false, focus_mode: false, inspector_open: true, panel_tree_width: 220, panel_tools_width: 300, panel_bottom_height: 180 }
     }
 }
 
@@ -71,6 +77,11 @@ impl Settings {
                 }
                 "plc_read_only" => s.plc_read_only = value == "1",
                 "dark" => s.dark = value == "1",
+                "focus_mode" => s.focus_mode = value == "1",
+                "inspector_open" => s.inspector_open = value == "1",
+                "panel_tree_width" => { if let Ok(v) = value.parse::<u16>() { s.panel_tree_width = v.clamp(140, 420); } }
+                "panel_tools_width" => { if let Ok(v) = value.parse::<u16>() { s.panel_tools_width = v.clamp(265, 480); } }
+                "panel_bottom_height" => { if let Ok(v) = value.parse::<u16>() { s.panel_bottom_height = v.clamp(120, 390); } }
                 "new_st" => s.new_st = value == "1",
                 "new_model" if !value.is_empty() => s.new_model = value.to_owned(),
                 "ui_scale" => {
@@ -105,7 +116,7 @@ impl Settings {
     }
     pub fn render(&self) -> String {
         format!(
-            "backup_on_save={}\nreopen_last={}\nmcp_server={}\nmcp_lan={}\nmcp_port={}\nmcp_token={}\nplc_read_only={}\ndark={}\nnew_st={}\nnew_model={}\nui_scale={}\nautosave_min={}\nscan_ms={}\ndefault_dir={}\npoll_ms={}\nlast_project={}\n{}",
+            "backup_on_save={}\nreopen_last={}\nmcp_server={}\nmcp_lan={}\nmcp_port={}\nmcp_token={}\nplc_read_only={}\ndark={}\nfocus_mode={}\ninspector_open={}\npanel_tree_width={}\npanel_tools_width={}\npanel_bottom_height={}\nnew_st={}\nnew_model={}\nui_scale={}\nautosave_min={}\nscan_ms={}\ndefault_dir={}\npoll_ms={}\nlast_project={}\n{}",
             u8::from(self.backup_on_save),
             u8::from(self.reopen_last),
             u8::from(self.mcp_server),
@@ -114,6 +125,11 @@ impl Settings {
             self.mcp_token,
             u8::from(self.plc_read_only),
             u8::from(self.dark),
+            u8::from(self.focus_mode),
+            u8::from(self.inspector_open),
+            self.panel_tree_width,
+            self.panel_tools_width,
+            self.panel_bottom_height,
             u8::from(self.new_st),
             self.new_model,
             self.ui_scale,
@@ -213,6 +229,11 @@ mod tests {
             scan_ms: 50,
             plc_read_only: true,
             dark: true,
+            focus_mode: true,
+            inspector_open: false,
+            panel_tree_width: 260,
+            panel_tools_width: 350,
+            panel_bottom_height: 200,
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }

@@ -3339,12 +3339,11 @@ mod tests {
         assert!(checked_next_instruction(&e, 1, 15).is_err());
         assert!(checked_next_instruction(&e, 0, 14).is_err());
         assert!(checked_next_instruction(&e, 2, 14).is_err());
-        let oversized = format!("{}END", "LD X0\nORZ= K1 K1 K0\nOUT Y0\n".repeat(60));
-        assert!(
-            crate::es2_encoder::encode(&plc::compile(&oversized).unwrap())
-                .unwrap_err()
-                .contains("512")
-        );
+        // Padding expansion beyond the old 512-instruction cap still encodes; the real
+        // budget is the program region.
+        let large = format!("{}END", "LD X0\nORZ= K1 K1 K0\nOUT Y0\n".repeat(60));
+        let encoded = crate::es2_encoder::encode(&plc::compile(&large).unwrap()).unwrap();
+        assert!(encoded.next_pc.len() > 512);
     }
     #[test]
     fn ss2_validates_all_wide_source_and_result_words() {

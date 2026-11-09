@@ -12,6 +12,7 @@ pub(super) struct WorkspaceUi {
     pub registers: Entity<TableState<Registers>>,
     pub watch_mode: bool,
     pub focus_mode: bool,
+    pub inspector_open: bool,
     /// Bottom inspector tab: 0 properties, 1 info/log.
     pub bottom_tab: usize,
     project_name: String,
@@ -130,6 +131,7 @@ fn items(name: &str, units: &[String]) -> Vec<TreeItem> {
                     .child(TreeItem::new("connection", tr("Bağlantı profilleri")))
                     .child(TreeItem::new("io", tr("Giriş / çıkış")))
                     .child(TreeItem::new("watch", tr("İzleme tablosu")))
+                    .child(TreeItem::new("recipes", tr("Parametreler / reçeteler")))
                     .child(TreeItem::new("diff", tr("Online / offline karşılaştırma")))
                     .child(TreeItem::new("trend", "Trend"))
                     .child(TreeItem::new("comparison", tr("Karşılaştırma"))),
@@ -173,6 +175,7 @@ impl WorkspaceUi {
                 Some("hardware") => Some(Tab::Hardware),
                 Some("io") => Some(Tab::Io),
                 Some("watch") => Some(Tab::Watch),
+                Some("recipes") => Some(Tab::Recipes),
                 Some("diff") => Some(Tab::Diff),
                 Some("trend") => Some(Tab::Trend),
                 Some("comparison") => Some(Tab::Comparison),
@@ -217,7 +220,8 @@ impl WorkspaceUi {
             tree,
             registers,
             watch_mode: false,
-            focus_mode: false,
+            focus_mode: opendvp::settings::get().focus_mode,
+            inspector_open: opendvp::settings::get().inspector_open,
             bottom_tab: 0,
             project_name: project.name.clone(),
             unit_labels: unit_labels(project),

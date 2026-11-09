@@ -1,5 +1,5 @@
 //! Cross-reference: where each device is read or written in the program.
-use opendvp::plc::{Action, Device, Program};
+use opendvp::plc::{Action, Area, Device, Program};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +71,43 @@ pub fn double_coils(program: &Program) -> BTreeSet<Device> {
         .collect()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unused {
+    /// Read in a condition or as a source, but no instruction ever drives it.
+    NeverWritten,
+    /// Driven by an instruction, but nothing ever reads it.
+    NeverRead,
+}
+
+/// Special relays/registers are driven or consumed by the PLC itself.
+fn system_owned(d: Device) -> bool {
+    match d.area {
+        Area::M => d.index >= 1000,
+        Area::D => (1000..2000).contains(&d.index) || d.index >= 9000,
+        _ => false,
+    }
+}
+
+/// Lint: devices that are only read (never driven) or only written (never consumed).
+/// Inputs (`X`) are driven by the field and outputs (`Y`) consumed by it, so they are
+/// excluded from the respective check; so are system-owned special devices.
+pub fn unused(program: &Program) -> Vec<(Device, Unused)> {
+    let mut out = Vec::new();
+    for (device, entries) in uses(program) {
+        if system_owned(device) {
+            continue;
+        }
+        let writes = entries.iter().any(|u| u.write);
+        let reads = entries.iter().any(|u| !u.write);
+        if reads && !writes && device.area != Area::X {
+            out.push((device, Unused::NeverWritten));
+        } else if writes && !reads && device.area != Area::Y {
+            out.push((device, Unused::NeverRead));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +131,29 @@ mod tests {
             double_coils(&program).into_iter().collect::<Vec<_>>(),
             vec!["Y0".parse::<Device>().unwrap()]
         );
+    }
+
+    #[test]
+    fn unused_devices_are_reported_except_io_and_system_owned() {
+        let program = opendvp::plc::compile(
+            "LD X0
+OUT M0
+LD M5
+OUT Y0
+LD M1000
+OUT Y1
+LD M1
+OUT M2
+LD M2
+OUT M1
+END
+",
+        )
+        .unwrap();
+        let found = unused(&program);
+        let has = |name: &str, kind| found.contains(&(name.parse().unwrap(), kind));
+        assert!(has("M0", Unused::NeverRead));
+        assert!(has("M5", Unused::NeverWritten));
+        assert_eq!(found.len(), 2, "{found:?}");
     }
 }

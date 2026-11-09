@@ -38,6 +38,11 @@ tool!("search_instructions", "Search OpenDVP's instruction guide (Turkish text) 
     /// Mnemonic or keyword.
     query: String,
 });
+tool!("st_library", "List or search OpenDVP's built-in ST standard library (FUNCTION_BLOCKs and FUNCTIONs usable in any ST program without declaring them). Without a query: one line per block (name, kind, category, first doc line). With a query (block name or keyword): full documentation, parameters with types and a ready-to-use declaration + call template for up to 8 matches. Use before writing ST that needs edges, timers in seconds, scaling, PID, motors, valves, alarms etc.", read_only_hint, StLibrary {
+    /// Optional block name or keyword (e.g. 'PID', 'debounce', 'valve'); empty lists everything.
+    #[serde(default)]
+    query: String,
+});
 tool!("list_models", "List the PLC models OpenDVP knows (id, family, program steps, I/O).", read_only_hint, ListModels {});
 tool!("list_serial_ports", "List serial/USB ports on this machine (for the PLC tools).", read_only_hint, ListSerialPorts {});
 
@@ -430,6 +435,62 @@ fn project_summary(state: &mut State) -> Value {
     })
 }
 
+/// Text of the `st_library` tool: a one-line-per-block list, or full docs for matches.
+fn st_library_text(query: &str) -> Res<String> {
+    let a = StLibrary { query: query.to_owned() };
+    let entries = opendvp::st::library_entries();
+    let q = a.query.trim().to_ascii_lowercase();
+    if q.is_empty() {
+        let lines: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                format!(
+                    "{} ({}, {}): {}",
+                    e.name,
+                    e.kind,
+                    e.category,
+                    e.doc.lines().next().unwrap_or_default()
+                )
+            })
+            .collect();
+        return Ok(lines.join("\n"));
+    }
+    let exact: Vec<_> = entries.iter().filter(|e| e.name.to_ascii_lowercase() == q).collect();
+    let hits: Vec<_> = if exact.is_empty() {
+        entries
+            .iter()
+            .filter(|e| e.name.to_ascii_lowercase().contains(&q) || e.doc.to_ascii_lowercase().contains(&q))
+            .take(8)
+            .collect()
+    } else {
+        exact
+    };
+    if hits.is_empty() {
+        return Err(format!("no library block matches '{}'", a.query));
+    }
+    let text: Vec<String> = hits
+        .iter()
+        .map(|e| {
+            let params = |l: &[opendvp::st::LibraryParam]| {
+                l.iter().map(|p| format!("{} : {}", p.name, p.ty)).collect::<Vec<_>>().join(", ")
+            };
+            let instance = format!("{}1", e.name.to_ascii_lowercase());
+            let (decl, call) = e.template(&instance);
+            let signature = match &e.returns {
+                Some(t) => format!("FUNCTION {} : {t}", e.name),
+                None => format!("FUNCTION_BLOCK {}", e.name),
+            };
+            format!(
+                "## {signature}\n{}\nInputs: {}\nOutputs: {}\nTemplate:\nVAR {decl} END_VAR\n{call}",
+                e.doc,
+                params(&e.inputs),
+                if e.returns.is_some() { "(return value)".to_owned() } else { params(&e.outputs) },
+            )
+        })
+        .collect();
+    Ok(text.join("\n\n"))
+}
+
 // ---------------------------------------------------------------- dispatch
 
 async fn run(state: &Mutex<State>, name: &str, params: &CallToolRequestParams) -> Res<String> {
@@ -457,6 +518,10 @@ async fn run(state: &Mutex<State>, name: &str, params: &CallToolRequestParams) -
             } else {
                 Ok(hits.join("\n\n"))
             }
+        }
+        "st_library" => {
+            let a: StLibrary = args(params)?;
+            st_library_text(&a.query)
         }
         "list_models" => {
             let models: Vec<Value> = opendvp::devices::MODELS
@@ -992,7 +1057,7 @@ impl ServerHandler for Handler {
     ) -> std::result::Result<ListToolsResult, RpcError> {
         Ok(ListToolsResult {
             tools: vec![
-                SearchInstructions::tool(), ListModels::tool(), ListSerialPorts::tool(),
+                SearchInstructions::tool(), StLibrary::tool(), ListModels::tool(), ListSerialPorts::tool(),
                 CompileIl::tool(), CompileSt::tool(), IlToWords::tool(), WordsToIl::tool(), ReadDvz::tool(),
                 ProjectNew::tool(), ProjectOpen::tool(), WindowProjectPull::tool(), WindowProjectPush::tool(), ProjectSave::tool(), ProjectInfo::tool(), ProjectExportDvp::tool(),
                 GetProgram::tool(), SetProgram::tool(), AddUnit::tool(), RemoveUnit::tool(),
@@ -1057,7 +1122,7 @@ fn server_details() -> ServerDetails {
             ..Default::default()
         },
         instructions: Some(
-            "Workflow: project_new or project_open -> search_instructions -> set_program -> project_compile \
+            "Workflow: project_new or project_open -> search_instructions (IL) / st_library (ST blocks) -> set_program -> project_compile \
              -> sim_set/sim_scan to test offline. Only after the user approves, use plc_probe and then plc_download \
              (confirm=true). Never start or download to a PLC without explicit user approval."
                 .into(),
@@ -1338,4 +1403,19 @@ pub fn stop_background() {
         stop.notify_one();
     }
     *state = Status::Off;
+}
+
+#[cfg(test)]
+mod st_library_tool_tests {
+    use super::st_library_text;
+
+    #[test]
+    fn lists_every_block_and_documents_a_match() {
+        let all = st_library_text("").unwrap();
+        assert_eq!(all.lines().count(), opendvp::st::library_entries().len());
+        let one = st_library_text("r_trig").unwrap();
+        assert!(one.contains("## FUNCTION_BLOCK R_TRIG"), "{one}");
+        assert!(one.contains("r_trig1 : R_TRIG;") && one.contains("r_trig1(CLK := FALSE);"), "{one}");
+        assert!(st_library_text("no-such-block-xyz").is_err());
+    }
 }

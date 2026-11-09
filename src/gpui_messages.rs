@@ -48,6 +48,33 @@ impl Workbench {
                     target,
                 });
             }
+            for (device, kind) in crate::xref::unused(program) {
+                let target = uses
+                    .get(&device)
+                    .and_then(|list| list.first())
+                    .and_then(|u| self.project.locate(u.line));
+                let name = self.device_title(device);
+                messages.push(Message {
+                    severity: match (kind, device.area) {
+                        (crate::xref::Unused::NeverWritten, opendvp::plc::Area::D) => {
+                            Severity::Info
+                        }
+                        (crate::xref::Unused::NeverWritten, _) => Severity::Warning,
+                        (crate::xref::Unused::NeverRead, _) => Severity::Info,
+                    },
+                    text: match kind {
+                        crate::xref::Unused::NeverWritten => tfmt!(
+                            "{name} okunuyor ama hiçbir yerde yazılmıyor.",
+                            "{name} is read but never written anywhere."
+                        ),
+                        crate::xref::Unused::NeverRead => tfmt!(
+                            "{name} yazılıyor ama hiçbir yerde okunmuyor.",
+                            "{name} is written but never read."
+                        ),
+                    },
+                    target,
+                });
+            }
             if let (Some(steps), Some(model)) =
                 (self.program_steps, opendvp::devices::find(&self.project.device))
                 && steps as u32 > model.steps

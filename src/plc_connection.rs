@@ -267,6 +267,14 @@ impl Client {
         self.with_session(move |s| opendvp::plc_force::force(s, device, mode))
             .await
     }
+    /// Read-only: current values of arbitrary bit/word devices on the monitoring session.
+    pub async fn read_values(
+        &self,
+        wanted: Vec<(Device, opendvp::st::DataType)>,
+    ) -> Result<Vec<opendvp::plc_monitor::Value>, String> {
+        self.with_session(move |s| opendvp::plc_monitor::read_values(s, &wanted))
+            .await
+    }
     pub async fn release_all_forces(&self) -> Result<(), String> {
         self.with_session(|s| opendvp::plc_force::release_all(s)).await
     }

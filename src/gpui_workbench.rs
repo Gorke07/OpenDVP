@@ -43,6 +43,10 @@ mod programs;
 mod symbols;
 #[path = "gpui_shell.rs"]
 mod shell;
+#[path = "gpui_source_editor.rs"]
+mod source_editor;
+#[path = "gpui_recipes.rs"]
+mod recipes_view;
 #[path = "gpui_settings.rs"]
 mod settings_page;
 #[path = "gpui_watch.rs"]
@@ -51,6 +55,10 @@ mod watch;
 mod widgets;
 #[path = "gpui_xref.rs"]
 mod xref_view;
+#[path = "gpui_live.rs"]
+mod live;
+#[path = "gpui_st_library.rs"]
+mod st_library;
 #[path = "gpui_theme.rs"]
 pub mod colors;
 use colors::rgb;
@@ -81,7 +89,9 @@ actions!(
         ShowSearch,
         CloseTab,
         NextTab,
-        PrevTab
+        PrevTab,
+        ToggleFocusMode,
+        ToggleInspector
     ]
 );
 
@@ -95,6 +105,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-shift-tab", PrevTab, None),
+        KeyBinding::new("ctrl-shift-enter", ToggleFocusMode, None),
+        KeyBinding::new("ctrl-j", ToggleInspector, None),
+        KeyBinding::new("ctrl-space", gpui_component::input::ShowCompletions, Some("Input && mode == editor")),
     ]);
 }
 #[derive(Clone, Copy, PartialEq)]
@@ -112,21 +125,24 @@ enum Tab {
     Connection,
     Trend,
     Help,
+    StLibrary,
     Log,
     Modules,
     FileMemory,
     Io,
     Comparison,
     Settings,
+    Recipes,
 }
 impl Tab {
     /// Every page, in the order the "+" menu offers the closed ones.
-    const ALL: [Tab; 19] = [
+    const ALL: [Tab; 21] = [
         Tab::Ladder,
         Tab::Source,
         Tab::Io,
         Tab::Trend,
         Tab::Watch,
+        Tab::Recipes,
         Tab::CrossRef,
         Tab::Hardware,
         Tab::Connection,
@@ -138,6 +154,7 @@ impl Tab {
         Tab::Symbols,
         Tab::Search,
         Tab::Help,
+        Tab::StLibrary,
         Tab::Log,
         Tab::Settings,
         Tab::NewProject,
@@ -162,8 +179,10 @@ impl Tab {
             Tab::Trend => "Trend",
             Tab::Comparison => tr("Karşılaştırma"),
             Tab::Help => tr("Komut kütüphanesi"),
+            Tab::StLibrary => tr("ST kütüphanesi"),
             Tab::Log => tr("Tanılama"),
             Tab::Settings => tr("Ayarlar"),
+            Tab::Recipes => tr("Parametreler / reçeteler"),
         }
     }
     /// Label on the tab strip: the two program views are the project's "Main" document.
@@ -191,9 +210,10 @@ impl Tab {
             Tab::FileMemory => gpui_component::IconName::Folder,
             Tab::Io => gpui_component::IconName::Map,
             Tab::Trend => gpui_component::IconName::ChartPie,
-            Tab::Help => gpui_component::IconName::BookOpen,
+            Tab::Help | Tab::StLibrary => gpui_component::IconName::BookOpen,
             Tab::Log => gpui_component::IconName::SquareTerminal,
             Tab::Settings => gpui_component::IconName::Settings,
+            Tab::Recipes => gpui_component::IconName::Inbox,
         }
     }
     /// The program views stay open; every other page can be closed.
@@ -218,6 +238,8 @@ enum Done {
     Ports(Result<Vec<crate::plc_connection::PortInfo>, String>),
     Hardware(Result<(crate::plc_connection::Client, crate::plc_connection::Sample), String>),
     HardwarePoll(Result<crate::plc_connection::Sample, String>),
+    /// Read-only values of the live-value panel, read from the connected PLC.
+    LiveValues(Result<Vec<opendvp::plc_monitor::Value>, String>),
     Download(Result<opendvp::plc_download::Report, String>),
     Probe(Result<opendvp::plc_download::Probe, String>),
     Force(Result<String, String>),
@@ -226,6 +248,8 @@ enum Done {
     Report(Option<Result<PathBuf, String>>),
     MemoryLoaded(Option<Result<(opendvp::file_memory::FileLoad, PathBuf), String>>),
     MemorySaved(Option<Result<(opendvp::file_memory::FileStore, PathBuf), String>>),
+    RecipeImported(Option<Result<opendvp::recipes::Recipe, String>>),
+    RecipeExported(Option<Result<PathBuf, String>>),
 }
 pub struct Workbench {
     focus: FocusHandle,
@@ -351,12 +375,14 @@ impl Workbench {
             None => (Project::default(), None),
         };
         let editor = cx.new(|cx| {
-            EditorState::new(window, cx)
-                .language("plain_text")
+            let mut editor = EditorState::new(window, cx)
+                .language(source_editor::language_name(project.language))
                 .line_number(true)
                 .searchable(true)
                 .soft_wrap(false)
-                .default_value(project.source.clone())
+                .default_value(project.source.clone());
+            source_editor::configure(&mut editor, project.language, cx);
+            editor
         });
         let query =
             cx.new(|cx| InputState::new(window, cx).placeholder(tr("Metin veya cihaz adresi…")));
@@ -743,6 +769,7 @@ impl Workbench {
             },
             Done::File(Some(result)) => match result {
                 Ok((project, path)) => {
+                    self.extra.recipes.reset();
                     self.project = project;
                     self.active_program = 0;
                     self.unit_sync = true;
@@ -840,6 +867,7 @@ impl Workbench {
                 }
                 self.extra.last_probe = Some(result);
             }
+            Done::LiveValues(result) => self.adopt_live(result),
             Done::HardwarePoll(result) => match result {
                 Ok(sample) => self.adopt_hardware(sample),
                 Err(e) => {
@@ -867,6 +895,16 @@ impl Workbench {
                 }
                 Some(Err(e)) => self.log(e),
                 None => {}
+            },
+            Done::RecipeImported(result) => match result {
+                Some(Ok(recipe)) => self.import_recipe_result(recipe, cx),
+                Some(Err(e)) => self.log(e),
+                None => {},
+            },
+            Done::RecipeExported(result) => match result {
+                Some(Ok(path)) => self.log(tfmt!("Reçete kaydedildi: {}", "Recipe saved: {}", path.display())),
+                Some(Err(e)) => self.log(e),
+                None => {},
             },
             Done::Report(result) => match result {
                 Some(Ok(path)) => {
@@ -896,6 +934,7 @@ impl Workbench {
     }
     fn tick(&mut self, cx: &mut Context<Self>) {
         self.sync_mcp(cx);
+        self.refresh_live();
         if self.dirty {
             self.autosave();
         } else {
@@ -938,6 +977,10 @@ impl Workbench {
         {
             let hardware = self.extra.hardware.clone().unwrap();
             self.dispatch(async move { Done::HardwarePoll(hardware.read().await) }, cx);
+            return;
+        }
+        if let Some(read) = self.live_poll() {
+            self.dispatch(read, cx);
             return;
         }
         if self.stop_requested {
@@ -1136,6 +1179,7 @@ impl Workbench {
                     }
                     let _ = self.project.save(&file.with_extension("onceki.odvp"));
                 }
+                self.extra.recipes.reset();
                 self.project = project;
                 self.active_program = 0;
                 self.unit_sync = true;
@@ -1298,6 +1342,7 @@ impl Workbench {
         self.simulator = Simulator::default();
         self.simulator.memory.file_memory = file_memory;
         let name = name.trim();
+        self.extra.recipes.reset();
         self.project = Project {
             source: if st {
                 opendvp::project::ST_TEMPLATE.into()
@@ -1395,17 +1440,25 @@ impl Workbench {
         div().text_sm().text_color(rgb(MUTED)).child(text.into())
     }
     fn source(&self, cx: &mut Context<Self>) -> AnyElement {
+        use gpui_component::menu::{DropdownMenu, PopupMenuItem};
         let locked = self.editing_locked();
+        let st = self.project.program_language(self.active_program) == SourceLanguage::St;
+        let view = cx.entity();
+        let language_locked = locked || self.bridge.is_some();
+        let export_locked = self.busy;
         let mut body = div()
             .flex()
             .flex_col()
             .size_full()
-            .gap_2()
-            .p_3()
             .child(
                 div()
                     .flex()
                     .gap_2()
+                    .flex_wrap()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(rgb(LINE))
                     .items_center()
                     .child(
                         div()
@@ -1417,61 +1470,83 @@ impl Workbench {
                                 self.project.program_language(self.active_program).label()
                             )),
                     )
-                    .child(
-                        self.button("language", "IL / ST", locked || self.bridge.is_some())
+                    .when(st, |bar| bar.child(
+                        self.button("source-st-library", tr("ST kütüphanesi"), false)
+                            .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
-                                let flip = |language| {
-                                    if language == SourceLanguage::Il {
-                                        SourceLanguage::St
-                                    } else {
-                                        SourceLanguage::Il
-                                    }
-                                };
-                                if this.active_program == 0 {
-                                    this.project.language = flip(this.project.language);
-                                } else if let Err(e) = this.project.set_unit_language(
-                                    this.active_program,
-                                    flip(this.project.program_language(this.active_program)),
-                                ) {
-                                    this.log(e);
-                                    return cx.notify();
-                                } else {
-                                    this.editor_sync = true;
-                                }
-                                this.dirty = true;
-                                this.compile();
+                                this.tab = Tab::StLibrary;
                                 cx.notify();
                             })),
-                    )
-                    .child(
-                        self.button("export", tr("Dışa aktar"), self.busy)
-                            .on_click(cx.listener(|this, _, _, cx| this.export(cx))),
-                    )
-                    .child(
-                        self.button("new-st", tr("Yeni ST"), locked || self.bridge.is_some())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if this.dirty {
-                                    this.log(tr("Yeni ST programından önce değişiklikleri kaydedin."));
-                                    cx.notify();
-                                    return;
-                                }
-                                this.commit_source(
-                                    opendvp::project::ST_TEMPLATE.into(),
-                                    SourceLanguage::St,
-                                    cx,
-                                );
-                            })),
-                    )
-                    .child(
+                    ))
+                    .when(st, |bar| bar.child(
                         self.button("generated-il", tr("Üretilen IL"), false)
+                            .ghost()
+                            .text_color(rgb(if self.extra.generated { ACCENT } else { TEXT }))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.extra.generated = !this.extra.generated;
                                 cx.notify();
                             })),
-                    )
+                    ))
+                    .when(st, |bar| bar.child(
+                        self.button("live-values", tr("Canlı değerler"), false)
+                            .ghost()
+                            .text_color(rgb(if self.extra.live.open { ACCENT } else { TEXT }))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.extra.live.open = !this.extra.live.open;
+                                this.refresh_live();
+                                cx.notify();
+                            })),
+                    ))
                     .child(div().flex_1())
-                    .child(Self::heading(tr("Ctrl+F ara · Ctrl+Z geri al · F7 derle")))
-                    .child(match &self.compile_mark {
+                    .child(self.button("source-actions", tr("Kaynak işlemleri"), false)
+                        .ghost()
+                        .dropdown_menu(move |menu, _, _| {
+                            let flip_view = view.clone();
+                            let export_view = view.clone();
+                            let new_view = view.clone();
+                            menu.item(PopupMenuItem::new(tr("Dili değiştir · IL / ST"))
+                                .disabled(language_locked)
+                                .on_click(move |_, _, cx| { flip_view.update(cx, |this, cx| {
+                                    let language = if this.project.program_language(this.active_program) == SourceLanguage::St { SourceLanguage::Il } else { SourceLanguage::St };
+                                    if this.active_program == 0 { this.project.language = language; }
+                                    else if let Err(e) = this.project.set_unit_language(this.active_program, language) {
+                                        this.log(e); return cx.notify();
+                                    }
+                                    this.editor_sync = true;
+                                    this.dirty = true;
+                                    this.compile();
+                                    cx.notify();
+                                }); }))
+                                .item(PopupMenuItem::new(tr("Dışa aktar"))
+                                    .disabled(export_locked)
+                                    .on_click(move |_, _, cx| { export_view.update(cx, |this, cx| this.export(cx)); }))
+                                .separator()
+                                .item(PopupMenuItem::new(tr("Yeni ST"))
+                                    .disabled(language_locked)
+                                    .on_click(move |_, _, cx| { new_view.update(cx, |this, cx| {
+                                        if this.dirty {
+                                            this.log(tr("Yeni ST programından önce değişiklikleri kaydedin."));
+                                            return cx.notify();
+                                        }
+                                        this.commit_source(opendvp::project::ST_TEMPLATE.into(), SourceLanguage::St, cx);
+                                    }); }))
+                        })),
+            )
+            .child(
+                div().flex_1().min_h_0().child(
+                    Editor::new(&self.editor)
+                        .h_full()
+                        .bordered(false)
+                        .disabled(locked)
+                        .aria_label(if st { "Structured Text" } else { "Instruction List" })
+                        .font_family("Consolas")
+                        .text_sm(),
+                ),
+            )
+            .child(div().flex().flex_wrap().items_center().justify_between().gap_2().px_3().py_1()
+                .border_t_1().border_color(rgb(LINE)).text_xs().text_color(rgb(MUTED))
+                .child(tr("Ctrl+Space öneriler · Ctrl+F ara · F7 derle"))
+                .child(match &self.compile_mark {
                         Some((line, message)) => div()
                             .max_w(px(420.))
                             .truncate()
@@ -1490,17 +1565,7 @@ impl Workbench {
                             .text_xs()
                             .text_color(rgb(GREEN))
                             .child(tr("Derleme hatasız")),
-                    }),
-            )
-            .child(
-                div().flex_1().min_h_0().child(
-                    Editor::new(&self.editor)
-                        .h_full()
-                        .disabled(locked)
-                        .font_family("Consolas")
-                        .text_sm(),
-                ),
-            );
+                    }));
         if self.extra.generated {
             let text = self
                 .project
@@ -1538,6 +1603,9 @@ impl Workbench {
                             .child(text),
                     ),
             );
+        }
+        if self.extra.live.open {
+            body = body.child(self.live_view(cx));
         }
         if let Some((source, words)) = &self.read_preview {
             body=body.child(div().h(px(220.)).flex().flex_col().p_3().bg(rgb(PANEL)).gap_2()

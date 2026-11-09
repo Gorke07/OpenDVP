@@ -79,7 +79,12 @@ impl Workbench {
                 cx.notify();
             }));
         let body = if self.ui.bottom_tab == 0 {
-            self.ladder_properties(cx)
+            div()
+                .id("bottom-properties-scroll")
+                .size_full()
+                .overflow_y_scroll()
+                .child(self.ladder_properties(cx))
+                .into_any_element()
         } else if self.ui.bottom_tab == 2 {
             self.messages_view(cx)
         } else {
@@ -233,6 +238,7 @@ impl Render for Workbench {
             self.open_tabs.push(self.tab);
         }
         self.sync_widgets(cx);
+        if self.tab == Tab::Recipes { self.sync_recipes(window, cx); }
         self.sync_config(window, cx);
         if self.selected_sync {
             self.sync_network_fields(window, cx);
@@ -250,6 +256,10 @@ impl Render for Workbench {
             self.editor
                 .update(cx, |input, cx| input.set_value(source, window, cx));
             self.shown_mark = None;
+        }
+        let language = self.project.program_language(self.active_program);
+        if self.editor.read(cx).language_name().as_ref() != source_editor::language_name(language) {
+            self.editor.update(cx, |editor, cx| source_editor::configure(editor, language, cx));
         }
         if self.unit_sync {
             self.unit_sync = false;
@@ -539,22 +549,14 @@ impl Render for Workbench {
                 .flex_shrink_0()
                 .disabled(disabled)
         };
-        let group = |caption: &'static str, buttons: Vec<AnyElement>| {
+        let group = |_caption: &'static str, buttons: Vec<AnyElement>| {
             div()
                 .flex()
-                .flex_col()
                 .items_center()
-                .gap(px(1.))
                 .px_2()
                 .child(div().flex().items_center().gap_1().children(buttons))
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(rgb(MUTED))
-                        .child(caption),
-                )
         };
-        let divider = || div().w(px(1.)).h(px(38.)).bg(rgb(LINE));
+        let divider = || div().w(px(1.)).h(px(22.)).bg(rgb(LINE));
         let step_disabled = self.running
             || self.local_running
             || self.busy
@@ -570,10 +572,12 @@ impl Render for Workbench {
         let stop_disabled =
             (!self.running && !self.local_running && !self.busy) || self.extra.hardware.is_some();
         let toolbar = div()
-            .h(px(58.))
+            .min_h(px(42.))
             .flex_shrink_0()
             .flex()
+            .flex_wrap()
             .items_center()
+            .py_1()
             .px_2()
             .bg(rgb(PANEL))
             .border_b_1()
@@ -761,7 +765,9 @@ impl Render for Workbench {
             Tab::Trend => self.trend_view(cx),
             Tab::Comparison => self.comparison_view(),
             Tab::Help => self.library_view(cx),
+            Tab::StLibrary => self.st_library_view(cx),
             Tab::Settings => self.settings_view(cx),
+            Tab::Recipes => self.recipes_view(cx),
             Tab::Log => div()
                 .id("log-scroll")
                 .flex_1()
@@ -874,6 +880,7 @@ impl Render for Workbench {
                 }
             }));
         let program_bar = self.program_bar(cx);
+        let layout = opendvp::settings::get();
         let show_programs =
             matches!(self.tab, Tab::Ladder | Tab::Source);
         let center = div()
@@ -914,11 +921,6 @@ impl Render for Workbench {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(Self::heading(tfmt!(
-                                "{} ağ · {} komut", "{} networks · {} instructions",
-                                self.program.as_ref().map_or(0, |p| p.networks.len()),
-                                self.program.as_ref().map_or(0, |p| p.instructions)
-                            )))
                             .child(
                                 Button::new("symbol-names")
                                     .label(if self.extra.show_symbols {
@@ -934,14 +936,28 @@ impl Render for Workbench {
                                         cx.notify();
                                     })),
                             )
+                            .when(self.tab == Tab::Ladder, |row| row.child(
+                                Button::new("toggle-inspector")
+                                    .label(tr("Alt panel"))
+                                    .tooltip(tr("Alt paneli göster / gizle · Ctrl+J"))
+                                    .ghost()
+                                    .xsmall()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.ui.inspector_open = !this.ui.inspector_open;
+                                        opendvp::settings::update(|s| s.inspector_open = this.ui.inspector_open);
+                                        cx.notify();
+                                    })),
+                            ))
                             .child(
                                 Button::new("focus-workspace")
                                     .icon(IconName::PanelRight)
-                                    .tooltip(tr("Yan panelleri göster / gizle"))
+                                    .label(if self.ui.focus_mode { tr("Düzeni geri getir") } else { tr("Odak modu") })
+                                    .tooltip(tr("Odak modu · Ctrl+Shift+Enter"))
                                     .ghost()
                                     .xsmall()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.ui.focus_mode = !this.ui.focus_mode;
+                                        opendvp::settings::update(|s| s.focus_mode = this.ui.focus_mode);
                                         cx.notify();
                                     })),
                             ),
@@ -954,8 +970,14 @@ impl Render for Workbench {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(if self.tab == Tab::Ladder {
+                    .child(if self.tab == Tab::Ladder && self.ui.inspector_open && !self.ui.focus_mode {
                         v_resizable("ladder-workspace")
+                            .on_resize(|state, _, cx| {
+                                if let Some(size) = state.read(cx).sizes().get(1) {
+                                    let height = f32::from(*size).round() as u16;
+                                    opendvp::settings::update(|s| s.panel_bottom_height = height.clamp(120, 390));
+                                }
+                            })
                             .child(
                                 resizable_panel()
                                     .size_range(px(170.)..px(2000.))
@@ -963,8 +985,8 @@ impl Render for Workbench {
                             )
                             .child(
                                 resizable_panel()
-                                    .size(px(210.))
-                                    .size_range(px(170.)..px(390.))
+                                    .size(px(f32::from(layout.panel_bottom_height)))
+                                    .size_range(px(120.)..px(390.))
                                     .child(self.bottom_panel(cx)),
                             )
                             .into_any_element()
@@ -982,6 +1004,12 @@ impl Render for Workbench {
             self.inspector_view(cx)
         };
         let document = h_resizable("document-workspace")
+            .on_resize(move |state, _, cx| {
+                if inspector && let Some(size) = state.read(cx).sizes().get(1) {
+                    let width = f32::from(*size).round() as u16;
+                    opendvp::settings::update(|s| s.panel_tools_width = width.clamp(265, 480));
+                }
+            })
             .child(
                 resizable_panel()
                     .size_range(px(300.)..px(4000.))
@@ -989,16 +1017,24 @@ impl Render for Workbench {
             )
             .child(
                 resizable_panel()
-                    .size(px(300.))
+                    .size(px(f32::from(layout.panel_tools_width)))
                     .size_range(px(265.)..px(480.))
                     .visible(inspector)
                     .child(side),
             );
         let workspace = div().flex_1().min_h_0().child(
             h_resizable("main-workspace")
+                .on_resize(|state, _, cx| {
+                    if let Some(size) = state.read(cx).sizes().first() {
+                        let width = f32::from(*size).round() as u16;
+                        if width >= 140 {
+                            opendvp::settings::update(|s| s.panel_tree_width = width.clamp(140, 420));
+                        }
+                    }
+                })
                 .child(
                     resizable_panel()
-                        .size(px(220.))
+                        .size(px(f32::from(layout.panel_tree_width)))
                         .size_range(px(140.)..px(420.))
                         .visible(!self.ui.focus_mode)
                         .child(self.project_tree()),
@@ -1051,6 +1087,16 @@ impl Render for Workbench {
             }))
             .on_action(cx.listener(|this, _: &ShowSearch, _, cx| {
                 this.tab = Tab::Search;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| {
+                this.ui.focus_mode = !this.ui.focus_mode;
+                opendvp::settings::update(|s| s.focus_mode = this.ui.focus_mode);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleInspector, _, cx| {
+                this.ui.inspector_open = !this.ui.inspector_open;
+                opendvp::settings::update(|s| s.inspector_open = this.ui.inspector_open);
                 cx.notify();
             }))
             .flex_1()

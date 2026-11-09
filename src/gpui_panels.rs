@@ -33,6 +33,7 @@ use opendvp::{
 };
 
 pub(super) struct Panels {
+    pub(super) recipes: super::recipes_view::RecipeUi,
     config: config_views::ConfigUi,
     pub(super) generated: bool,
     pub(super) comparison_rows: Vec<(String, String, u32, u32)>,
@@ -40,6 +41,7 @@ pub(super) struct Panels {
     fields: Vec<(Field, &'static str, Entity<InputState>)>,
     pub hardware: Option<Client>,
     pub hardware_polling: bool,
+    pub(super) live: super::live::Live,
     pub hardware_next: Instant,
     hardware_received: Option<Instant>,
     hardware_config: Option<plc_connection::Config>,
@@ -98,9 +100,15 @@ pub(super) struct Panels {
     pub(super) library_item: Option<&'static crate::palette::Item>,
     pub(super) library_topic: Option<usize>,
     pub(super) library_query: Entity<InputState>,
+    pub(super) st_lib_query: Entity<InputState>,
+    pub(super) st_lib_selected: Option<String>,
     /// Device configuration: selected rack slot (`None` = CPU) and catalog search.
     pub(super) hw_selected: Option<usize>,
     pub(super) hw_query: Entity<InputState>,
+    pub(super) hw_cr: Entity<InputState>,
+    pub(super) hw_data: Entity<InputState>,
+    pub(super) hw_count: Entity<InputState>,
+    pub(super) hw_read: bool,
     /// Last module scan read from the PLC.
     pub(super) hw_scan: Option<Result<opendvp::plc_modules::ModuleScan, String>>,
     /// Cross-reference: search and selected device.
@@ -182,6 +190,7 @@ impl Panels {
         .detach();
         let config = config_views::ConfigUi::new(window, cx);
         Self {
+            recipes: super::recipes_view::RecipeUi::new(window, cx),
             config,
             generated: false,
             comparison_rows: Vec::new(),
@@ -189,6 +198,7 @@ impl Panels {
             fields,
             hardware: None,
             hardware_polling: false,
+            live: Default::default(),
             hardware_next: Instant::now(),
             hardware_received: None,
             hardware_config: None,
@@ -251,6 +261,10 @@ impl Panels {
             library_item: crate::palette::ITEMS.first(),
             library_topic: None,
             hw_selected: None,
+            hw_cr: Self::input(window, cx, "0"),
+            hw_data: Self::input(window, cx, "D100"),
+            hw_count: Self::input(window, cx, "1"),
+            hw_read: true,
             hw_scan: None,
             xref_device: None,
             watch_selected: None,
@@ -270,6 +284,15 @@ impl Panels {
                     .detach();
                 input
             },
+            st_lib_query: {
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx).placeholder(tr("Blok, açıklama veya parametre ara…"))
+                });
+                cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify())
+                    .detach();
+                input
+            },
+            st_lib_selected: None,
             library_query: {
                 let input = cx.new(|cx| {
                     InputState::new(window, cx).placeholder(tr("Komut, açıklama veya konu ara…"))

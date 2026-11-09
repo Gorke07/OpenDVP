@@ -1146,6 +1146,10 @@ impl fmt::Display for Diagnostic {
     }
 }
 
+/// Longest single network (rung). The old whole-program cap of 512 proved safe for the
+/// recursive condition passes, so it now bounds one network instead.
+pub const MAX_NETWORK_INSTRUCTIONS: usize = 512;
+
 fn compile_inner(source: &str) -> Result<Program, Diagnostic> {
     let mut networks = Vec::new();
     let mut flow = Vec::new();
@@ -1162,6 +1166,10 @@ fn compile_inner(source: &str) -> Result<Program, Diagnostic> {
     let mut control_continuation = false;
     let mut sfc_bus = false;
     let mut instructions = 0;
+    // Instructions of the network being built: its condition is a tree whose depth grows
+    // with this count, and deep trees overflow the stack in later recursive passes.
+    let mut network_instructions = 0usize;
+    let mut networks_seen = 0usize;
     let mut timers = BTreeSet::new();
     for (idx, raw) in source.lines().enumerate() {
         let line = idx + 1;
@@ -1187,8 +1195,22 @@ fn compile_inner(source: &str) -> Result<Program, Diagnostic> {
             return Err(fail("END sonrasında komut olamaz".into()));
         }
         instructions += 1;
-        if instructions > 512 {
-            return Err(fail("İlk sürüm en fazla 512 komut destekler".into()));
+        // A completed network was pushed while handling the previous instruction.
+        if networks.len() != networks_seen {
+            networks_seen = networks.len();
+            network_instructions = 0;
+        }
+        network_instructions += 1;
+        if network_instructions > MAX_NETWORK_INSTRUCTIONS {
+            return Err(fail(format!(
+                "Bir ağ en fazla {MAX_NETWORK_INSTRUCTIONS} komut içerebilir; ağı bölün"
+            )));
+        }
+        if instructions > crate::es2_encoder::MAX_EXECUTABLE_INSTRUCTIONS {
+            return Err(fail(format!(
+                "Program en fazla {} komut içerebilir (PLC program alanı)",
+                crate::es2_encoder::MAX_EXECUTABLE_INSTRUCTIONS
+            )));
         }
         let mut words: Vec<String> = raw_words
             .iter()
